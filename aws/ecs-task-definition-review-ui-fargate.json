@@ -1,0 +1,99 @@
+{
+  "family": "docintel-review-ui",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "__EXECUTION_ROLE_ARN__",
+  "taskRoleArn": "__TASK_ROLE_ARN__",
+  "containerDefinitions": [
+    {
+      "name": "review-ui",
+      "image": "__IMAGE_URI__",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8501,
+          "hostPort": 8501,
+          "protocol": "tcp"
+        }
+      ],
+      "command": [
+        "streamlit",
+        "run",
+        "review_ui/streamlit_app.py",
+        "--server.port",
+        "8501",
+        "--server.address",
+        "0.0.0.0",
+        "--logger.level=info"
+      ],
+      "environment": [
+        {
+          "name": "APP_ENV",
+          "value": "production"
+        },
+        {
+          "name": "STORAGE_BACKEND",
+          "value": "s3"
+        },
+        {
+          "name": "S3_REGION",
+          "value": "__AWS_REGION__"
+        },
+        {
+          "name": "S3_BUCKET_UPLOADS",
+          "value": "__S3_BUCKET_UPLOADS__"
+        },
+        {
+          "name": "S3_BUCKET_EXPORTS",
+          "value": "__S3_BUCKET_EXPORTS__"
+        },
+        {
+          "name": "REVIEW_API_BASE",
+          "value": "__REVIEW_API_BASE__"
+        },
+        {
+          "name": "LOG_LEVEL",
+          "value": "INFO"
+        },
+        {
+          "name": "DEBUG",
+          "value": "false"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "__DATABASE_URL_SECRET_ARN__"
+        },
+        {
+          "name": "CELERY_BROKER_URL",
+          "valueFrom": "__CELERY_BROKER_SECRET_ARN__"
+        },
+        {
+          "name": "CELERY_RESULT_BACKEND",
+          "valueFrom": "__CELERY_RESULT_BACKEND_SECRET_ARN__"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/docintel-review-ui",
+          "awslogs-region": "__AWS_REGION__",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ],
+  "tags": [
+    {
+      "key": "Environment",
+      "value": "production"
+    },
+    {
+      "key": "Service",
+      "value": "review-ui"
+    }
+  ]
+}
