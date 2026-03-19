@@ -1,4 +1,4 @@
-"""Document pipeline: OCR → classify → extract → line items → LLM enrich → validate → score → package."""
+"""Document pipeline: OCR → normalize → classify → extract → line items → LLM enrich → validate → score → package."""
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -11,6 +11,7 @@ from app.extraction.factory import get_extractor
 from app.extraction.line_items import extract_line_items
 from app.ocr.factory import get_ocr_provider
 from app.pipelines.confidence import ConfidenceScorer
+from app.utils.text import normalize_ocr_artifacts
 from app.utils.validators import run_validators
 
 
@@ -26,29 +27,33 @@ class DocumentPipeline:
         # 1. OCR
         ocr_result = self.ocr_provider.extract(path)
 
-        # 2. Classify
-        classification = self.classifier.classify(ocr_result.text)
+        # 2. Normalize OCR artifacts for downstream classification/extraction
+        raw_text = ocr_result.text
+        normalized_text = normalize_ocr_artifacts(raw_text)
+        ocr_result.text = normalized_text
+
+        # 3. Classify
+        classification = self.classifier.classify(normalized_text)
         extractor      = get_extractor(classification.label)
 
-        # 3. Extract header fields
+        # 4. Extract header fields
         extracted       = extractor.extract(ocr_result)
         snippets        = extracted.metadata.get("field_snippets", {})
         required_fields = extracted.metadata.get("required_fields", [])
         page_map        = extracted.metadata.get("field_page_map", {})
         bbox_map        = extracted.metadata.get("field_bbox_map", {})
 
-        # 4. Line item extraction (invoice & receipt)
+        # 5. Line item extraction (invoice & receipt)
         line_items: list[dict] = []
         if extracted.document_type in ("invoice", "receipt"):
             line_items = extract_line_items(ocr_result, stored_path=path)
 
-        # 5. Optional LLM enrichment for low-confidence fields
+        # 6. Optional LLM enrichment for low-confidence fields
         fields = dict(extracted.fields)
         try:
             from app.services.llm_extraction_service import LLMExtractionService
             llm_svc = LLMExtractionService()
             if llm_svc._enabled:
-                # Pre-score to identify which fields to enrich
                 pre_scored = self.scorer.score_fields(
                     fields=fields,
                     snippets=snippets,
@@ -58,17 +63,17 @@ class DocumentPipeline:
                 )
                 fields = llm_svc.enrich_fields(
                     document_type=extracted.document_type,
-                    ocr_text=ocr_result.text,
+                    ocr_text=normalized_text,
                     current_fields=fields,
                     field_confidences=pre_scored,
                 )
         except Exception:
-            pass  # LLM enrichment is best-effort
+            pass
 
-        # 6. Field validation
+        # 7. Field validation
         validation_results = run_validators(extracted.document_type, fields)
 
-        # 7. Confidence scoring
+        # 8. Confidence scoring
         ocr_confidence   = ocr_result.metadata.get("average_confidence", 0.0)
         field_confidences= self.scorer.score_fields(
             fields=fields,
@@ -84,7 +89,7 @@ class DocumentPipeline:
             required_fields=required_fields,
         )
 
-        # 8. Annotate low-confidence fields with page evidence
+        # 9. Annotate low-confidence fields with page evidence
         low_conf_fields = []
         for fc in field_confidences:
             if fc.requires_review:
@@ -117,7 +122,7 @@ class DocumentPipeline:
             "document_type":         extracted.document_type,
             "classifier_confidence": classification.confidence,
             "document_confidence":   document_confidence,
-            "ocr_text":              ocr_result.text,
+            "ocr_text":              raw_text,
             "ocr_metadata":          ocr_result.metadata,
             "raw_payload": {
                 "classification": asdict(classification),

@@ -17,11 +17,14 @@ def test_liveness_endpoint(client) -> None:
 
 
 def test_readiness_endpoint(client) -> None:
-    response = client.get("/api/v1/health/ready")
+    with patch("redis.from_url") as redis_from_url:
+        redis_from_url.return_value.ping.return_value = True
+        response = client.get("/api/v1/health/ready")
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
     assert "database" in data
+    assert data["redis"] == "ok"
 
 
 def test_readiness_returns_503_when_db_unavailable(client) -> None:
@@ -35,7 +38,9 @@ def test_readiness_returns_503_when_db_unavailable(client) -> None:
     original_override = app.dependency_overrides[db_dependency]
     app.dependency_overrides[db_dependency] = broken_db
     try:
-        response = client.get("/api/v1/health/ready")
+        with patch("redis.from_url") as redis_from_url:
+            redis_from_url.return_value.ping.return_value = True
+            response = client.get("/api/v1/health/ready")
     finally:
         app.dependency_overrides[db_dependency] = original_override
 
@@ -43,6 +48,17 @@ def test_readiness_returns_503_when_db_unavailable(client) -> None:
     data = response.json()
     assert data["status"] == "degraded"
     assert data["database"] == "error"
+
+
+def test_readiness_returns_503_when_redis_unavailable(client) -> None:
+    with patch("redis.from_url") as redis_from_url:
+        redis_from_url.return_value.ping.side_effect = RuntimeError("redis unavailable")
+        response = client.get("/api/v1/health/ready")
+
+    assert response.status_code == 503
+    data = response.json()
+    assert data["status"] == "degraded"
+    assert data["redis"] == "error"
 
 
 # ── Upload ────────────────────────────────────────────────────────────────────
@@ -57,7 +73,7 @@ def test_upload_document_returns_202(client, monkeypatch) -> None:
     """Upload a valid PDF (mocked content-type) and expect 202 Accepted."""
     monkeypatch.setattr(
         "app.api.v1.routes.documents.process_document_task.delay",
-        lambda doc_id: _fake_task(),
+        lambda doc_id, request_id=None: _fake_task(),
     )
     response = client.post(
         "/api/v1/documents/upload",
@@ -83,8 +99,9 @@ def test_upload_high_priority(client, monkeypatch) -> None:
     """priority=true should dispatch to the high-priority task."""
     dispatched = {}
 
-    def fake_high(doc_id: str):
+    def fake_high(doc_id: str, request_id: str | None = None):
         dispatched["doc_id"] = doc_id
+        dispatched["request_id"] = request_id
         return _fake_task()
 
     monkeypatch.setattr(
@@ -97,6 +114,7 @@ def test_upload_high_priority(client, monkeypatch) -> None:
     )
     assert response.status_code == 202
     assert "doc_id" in dispatched
+    assert dispatched["request_id"] is not None
 
 
 # ── List ──────────────────────────────────────────────────────────────────────
@@ -114,7 +132,7 @@ def test_list_documents_empty(client) -> None:
 def test_list_documents_with_upload(client, monkeypatch) -> None:
     monkeypatch.setattr(
         "app.api.v1.routes.documents.process_document_task.delay",
-        lambda doc_id: _fake_task(),
+        lambda doc_id, request_id=None: _fake_task(),
     )
     client.post(
         "/api/v1/documents/upload",
@@ -130,7 +148,7 @@ def test_list_documents_with_upload(client, monkeypatch) -> None:
 def test_list_documents_status_filter(client, monkeypatch) -> None:
     monkeypatch.setattr(
         "app.api.v1.routes.documents.process_document_task.delay",
-        lambda doc_id: _fake_task(),
+        lambda doc_id, request_id=None: _fake_task(),
     )
     client.post(
         "/api/v1/documents/upload",
@@ -152,7 +170,7 @@ def test_get_document_not_found(client) -> None:
 def test_get_document_status(client, monkeypatch) -> None:
     monkeypatch.setattr(
         "app.api.v1.routes.documents.process_document_task.delay",
-        lambda doc_id: _fake_task(),
+        lambda doc_id, request_id=None: _fake_task(),
     )
     upload_resp = client.post(
         "/api/v1/documents/upload",
@@ -169,7 +187,7 @@ def test_get_document_status(client, monkeypatch) -> None:
 def test_search_returns_list(client, monkeypatch) -> None:
     monkeypatch.setattr(
         "app.api.v1.routes.documents.process_document_task.delay",
-        lambda doc_id: _fake_task(),
+        lambda doc_id, request_id=None: _fake_task(),
     )
     client.post(
         "/api/v1/documents/upload",
@@ -187,7 +205,7 @@ def test_search_returns_list(client, monkeypatch) -> None:
 def test_delete_document(client, monkeypatch) -> None:
     monkeypatch.setattr(
         "app.api.v1.routes.documents.process_document_task.delay",
-        lambda doc_id: _fake_task(),
+        lambda doc_id, request_id=None: _fake_task(),
     )
     upload_resp = client.post(
         "/api/v1/documents/upload",

@@ -116,23 +116,64 @@ HTTP runtime controls:
 
 ---
 
-## Quick Start
+## Local Run
+
+### Fastest local path: Docker Compose
+
+Windows PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\local-up.ps1 -Rebuild
+```
+
+Manual equivalent:
 
 ```bash
 cp .env.example .env
 docker compose up --build -d
 docker compose exec api alembic upgrade head
-open http://localhost:8000/docs
-bash scripts/demo_run.sh
 ```
+
+Open:
 
 | Service | URL |
 |---|---|
-| API + Swagger | http://localhost:8000/docs |
+| Main app UI | http://localhost:8000/ |
+| API docs | http://localhost:8000/docs |
 | Celery Flower | http://localhost:5555 |
 | Grafana | http://localhost:3000 (admin/admin) |
 | MinIO | http://localhost:9001 (minioadmin/minioadmin) |
 | Review UI | http://localhost:8501 |
+
+Run the sample flow:
+
+```bash
+bash scripts/demo_run.sh
+```
+
+Stop services:
+
+```bash
+docker compose down
+```
+
+### Running directly on your machine
+
+If you want to run FastAPI/Celery outside Docker, start PostgreSQL and Redis locally and use:
+
+```bash
+cp .env.localhost.example .env
+pip install -e ".[dev]"
+python -m spacy download en_core_web_sm
+alembic upgrade head
+uvicorn app.main:app --reload
+```
+
+In another shell:
+
+```bash
+celery -A app.workers.celery_app.celery_app worker --loglevel=INFO --queues=documents.normal
+```
 
 ---
 

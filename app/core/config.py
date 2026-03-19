@@ -1,8 +1,12 @@
+from __future__ import annotations
+
+import os
+import warnings
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -10,15 +14,20 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     # ── App ───────────────────────────────────────────────────────────────────
-    app_name:        str  = Field(default="Document Intelligence Platform", alias="APP_NAME")
-    app_env:         str  = Field(default="local", alias="APP_ENV")
-    api_v1_prefix:   str  = Field(default="/api/v1", alias="API_V1_PREFIX")
-    debug:           bool = Field(default=False, alias="DEBUG")
-    log_level:       str  = Field(default="INFO", alias="LOG_LEVEL")
-    pipeline_version:str  = Field(default="0.3.0", alias="PIPELINE_VERSION")
+    app_name:         str  = Field(default="Document Intelligence Platform", alias="APP_NAME")
+    app_env:          str  = Field(default="local", alias="APP_ENV")
+    api_v1_prefix:    str  = Field(default="/api/v1", alias="API_V1_PREFIX")
+    debug:            bool = Field(default=False, alias="DEBUG")
+    log_level:        str  = Field(default="INFO", alias="LOG_LEVEL")
+    pipeline_version: str  = Field(default="0.3.0", alias="PIPELINE_VERSION")
+
+    # ── CORS ──────────────────────────────────────────────────────────────────
+    allowed_origins: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["*"],
+        alias="ALLOWED_ORIGINS",
+    )
 
     # ── Database ──────────────────────────────────────────────────────────────
-    # Note: For Docker Compose, use localhost. For Fargate, use RDS endpoint.
     database_url:     str = Field(
         default="postgresql+psycopg://postgres:postgres@localhost:5432/docintel",
         alias="DATABASE_URL",
@@ -29,15 +38,12 @@ class Settings(BaseSettings):
     db_pool_recycle:  int = Field(default=1800, alias="DB_POOL_RECYCLE")
 
     # ── Celery / Redis ────────────────────────────────────────────────────────
-    # Note: For Docker Compose, use localhost. For Fargate, use ElastiCache endpoint.
     celery_broker_url:        str = Field(default="redis://localhost:6379/0", alias="CELERY_BROKER_URL")
     celery_result_backend:    str = Field(default="redis://localhost:6379/1", alias="CELERY_RESULT_BACKEND")
     celery_task_soft_time_limit: int = Field(default=300, alias="CELERY_TASK_SOFT_TIME_LIMIT")
     celery_task_time_limit:   int = Field(default=600, alias="CELERY_TASK_TIME_LIMIT")
 
     # ── Storage ───────────────────────────────────────────────────────────────
-    # For Fargate: Set STORAGE_BACKEND=s3, then use ECS task role for credentials
-    # or provide S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY for explicit creds
     storage_backend:  Literal["local", "s3"] = Field(default="local", alias="STORAGE_BACKEND")
     upload_dir:       Path = Field(default=Path("data/uploads"), alias="UPLOAD_DIR")
     export_dir:       Path = Field(default=Path("data/exports"), alias="EXPORT_DIR")
@@ -60,6 +66,7 @@ class Settings(BaseSettings):
     rate_limit_enabled:           bool = Field(default=True, alias="RATE_LIMIT_ENABLED")
     rate_limit_upload_per_minute: int  = Field(default=30, alias="RATE_LIMIT_UPLOAD_PER_MINUTE")
     rate_limit_default_per_minute:int  = Field(default=120, alias="RATE_LIMIT_DEFAULT_PER_MINUTE")
+    redis_rate_limit_url: str | None = Field(default=None, alias="REDIS_RATE_LIMIT_URL")
 
     # ── API Auth ──────────────────────────────────────────────────────────────
     api_key_header: str       = Field(default="X-API-Key", alias="API_KEY_HEADER")
@@ -91,6 +98,31 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return [k.strip() for k in v.split(",") if k.strip()]
         return list(v)
+
+    @field_validator("allowed_origins", mode="before")
+    @classmethod
+    def parse_allowed_origins(cls, v: str | list | None) -> list[str]:
+        if v in (None, ""):
+            return ["*"]
+        if isinstance(v, str):
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
+        return list(v)
+
+    @model_validator(mode="after")
+    def validate_runtime_warnings(self) -> "Settings":
+        if self.llm_extraction_enabled and not os.environ.get("ANTHROPIC_API_KEY"):
+            warnings.warn(
+                "LLM_EXTRACTION_ENABLED=true but ANTHROPIC_API_KEY is not set. "
+                "LLM fallback extraction will be skipped.",
+                stacklevel=2,
+            )
+        if self.app_env == "production" and self.allowed_origins == ["*"]:
+            warnings.warn(
+                "ALLOWED_ORIGINS is '*' in production. "
+                "Set ALLOWED_ORIGINS to your frontend origin.",
+                stacklevel=2,
+            )
+        return self
 
 
 @lru_cache(maxsize=1)

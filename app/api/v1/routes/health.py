@@ -1,4 +1,6 @@
 """Health check routes — liveness and readiness probes."""
+from __future__ import annotations
+
 from fastapi import APIRouter, Depends
 from fastapi import status as http_status
 from fastapi.responses import JSONResponse
@@ -13,29 +15,40 @@ settings = get_settings()
 
 
 @router.get("/health")
-@router.get("/health/live")       # ← Kubernetes liveness alias
+@router.get("/health/live")
 def liveness() -> dict:
-    """Fast liveness probe — no DB check, just confirms process is alive."""
+    """Fast liveness probe — no external checks, just confirms the process is alive."""
     return {"status": "ok", "version": settings.pipeline_version}
 
 
-@router.get("/health/ready")      # ← Kubernetes readiness probe
+@router.get("/health/ready")
 def readiness(db: Session = Depends(db_dependency)) -> dict:
-    """Readiness probe — confirms database is reachable before accepting traffic."""
-    db_ok = False
+    """Readiness probe — confirms database and Redis are reachable."""
+    checks: dict[str, str] = {}
+
     try:
         db.execute(text("SELECT 1"))
-        db_ok = True
+        checks["database"] = "ok"
     except Exception:
-        pass
+        checks["database"] = "error"
 
+    try:
+        import redis as redis_lib
+
+        redis_client = redis_lib.from_url(settings.celery_broker_url, socket_timeout=1.0)
+        redis_client.ping()
+        checks["redis"] = "ok"
+    except Exception:
+        checks["redis"] = "error"
+
+    all_ok = all(value == "ok" for value in checks.values())
     payload = {
-        "status": "ok" if db_ok else "degraded",
+        "status": "ok" if all_ok else "degraded",
         "version": settings.pipeline_version,
         "env": settings.app_env,
         "storage_backend": settings.storage_backend,
-        "database": "ok" if db_ok else "error",
+        **checks,
     }
-    if db_ok:
+    if all_ok:
         return payload
     return JSONResponse(status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE, content=payload)

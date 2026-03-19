@@ -39,7 +39,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /install /usr/local
 
 # Application source
-COPY . /app
+COPY app ./app
+COPY review_ui ./review_ui
+COPY alembic ./alembic
+COPY alembic.ini ./alembic.ini
+COPY scripts ./scripts
+COPY frontend ./frontend
 
 RUN mkdir -p /app/data/uploads /app/data/exports && \
     addgroup --system appgroup && \

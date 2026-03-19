@@ -22,14 +22,24 @@ settings = get_settings()
 
 # ── Document processing ───────────────────────────────────────────────────────
 
-def _run_processing(self: Any, document_id: str) -> dict:
+def _run_processing(self: Any, document_id: str, request_id: str | None = None) -> dict:
     db = SessionLocal()
     try:
-        logger.info("processing_document", extra={"document_id": document_id, "task_id": self.request.id})
+        logger.info(
+            "processing_document",
+            extra={
+                "document_id": document_id,
+                "task_id": self.request.id,
+                "request_id": request_id or "n/a",
+            },
+        )
         service = PipelineService(db)
         return service.process_document(document_id)
     except SoftTimeLimitExceeded:
-        logger.error("task_soft_time_limit_exceeded", extra={"document_id": document_id})
+        logger.error(
+            "task_soft_time_limit_exceeded",
+            extra={"document_id": document_id, "request_id": request_id},
+        )
         raise
     finally:
         db.close()
@@ -43,8 +53,8 @@ def _run_processing(self: Any, document_id: str) -> dict:
     retry_kwargs={"max_retries": 3},
     name="app.workers.tasks.process_document_task",
 )
-def process_document_task(self, document_id: str) -> dict:
-    return _run_processing(self, document_id)
+def process_document_task(self, document_id: str, request_id: str | None = None) -> dict:
+    return _run_processing(self, document_id, request_id=request_id)
 
 
 @celery_app.task(
@@ -55,18 +65,18 @@ def process_document_task(self, document_id: str) -> dict:
     retry_kwargs={"max_retries": 5},
     name="app.workers.tasks.process_document_high_priority",
 )
-def process_document_high_priority(self, document_id: str) -> dict:
-    return _run_processing(self, document_id)
+def process_document_high_priority(self, document_id: str, request_id: str | None = None) -> dict:
+    return _run_processing(self, document_id, request_id=request_id)
 
 
 @celery_app.task(
     bind=True,
     name="app.workers.tasks.batch_process_task",
 )
-def batch_process_task(self, document_ids: list[str]) -> dict:
+def batch_process_task(self, document_ids: list[str], request_id: str | None = None) -> dict:
     results: dict[str, str] = {}
     for doc_id in document_ids:
-        task = process_document_task.apply_async(args=[doc_id])
+        task = process_document_task.apply_async(args=[doc_id], kwargs={"request_id": request_id})
         results[doc_id] = str(task.id)
         logger.info("batch_enqueued", extra={"document_id": doc_id, "task_id": task.id})
     return {"enqueued": results}

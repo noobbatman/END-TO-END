@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.core.config import get_settings
-from app.core.http_runtime import rate_limiter
+import app.core.http_runtime as http_runtime
 from app.core.metrics import http_request_duration_seconds, http_requests_total
 
 
@@ -19,7 +19,7 @@ def test_default_rate_limit_enforced(client) -> None:
     settings = get_settings()
     original_enabled = settings.rate_limit_enabled
     original_default = settings.rate_limit_default_per_minute
-    rate_limiter.reset()
+    http_runtime.rate_limiter.reset()
     settings.rate_limit_enabled = True
     settings.rate_limit_default_per_minute = 1
 
@@ -29,7 +29,7 @@ def test_default_rate_limit_enforced(client) -> None:
     finally:
         settings.rate_limit_enabled = original_enabled
         settings.rate_limit_default_per_minute = original_default
-        rate_limiter.reset()
+        http_runtime.rate_limiter.reset()
 
     assert first.status_code == 200
     assert first.headers["X-RateLimit-Limit"] == "1"

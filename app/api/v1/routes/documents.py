@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -30,6 +30,7 @@ router = APIRouter(dependencies=[Depends(require_api_key)])
 
 @router.post("/upload", response_model=DocumentUploadResponse, status_code=status.HTTP_202_ACCEPTED)
 async def upload_document(
+    request: Request,
     file: UploadFile = File(...),
     priority: bool = Query(default=False, description="Route to high-priority queue"),
     db: Session = Depends(db_dependency),
@@ -38,7 +39,7 @@ async def upload_document(
     service = DocumentService(db)
     document = await service.create_document(file, tenant_id=tenant_id)
     task_fn = process_document_high_priority if priority else process_document_task
-    task = task_fn.delay(document.id)
+    task = task_fn.delay(document.id, request_id=getattr(request.state, "request_id", None))
     return DocumentUploadResponse(
         document=DocumentRead.model_validate(document),
         task_id=str(task.id),
@@ -47,6 +48,7 @@ async def upload_document(
 
 @router.post("/upload/batch", response_model=BatchUploadResponse, status_code=status.HTTP_202_ACCEPTED)
 async def upload_documents_batch(
+    request: Request,
     files: list[UploadFile] = File(...),
     priority: bool = Query(default=False),
     db: Session = Depends(db_dependency),
@@ -57,7 +59,7 @@ async def upload_documents_batch(
     items: list[DocumentUploadResponse] = []
     for file in files:
         document = await service.create_document(file, tenant_id=tenant_id)
-        task = task_fn.delay(document.id)
+        task = task_fn.delay(document.id, request_id=getattr(request.state, "request_id", None))
         items.append(DocumentUploadResponse(
             document=DocumentRead.model_validate(document),
             task_id=str(task.id),
@@ -163,6 +165,7 @@ def get_document(
 
 @router.post("/{document_id}/reprocess", response_model=ReprocessResponse, status_code=status.HTTP_202_ACCEPTED)
 def reprocess_document(
+    request: Request,
     document_id: str,
     priority: bool = Query(default=False),
     db: Session = Depends(db_dependency),
@@ -174,7 +177,7 @@ def reprocess_document(
     AuditService(db).log(doc.id, AuditEventType.document_reprocessed, payload={})
     db.commit()
     task_fn = process_document_high_priority if priority else process_document_task
-    task = task_fn.delay(doc.id)
+    task = task_fn.delay(doc.id, request_id=getattr(request.state, "request_id", None))
     return ReprocessResponse(document_id=doc.id, task_id=str(task.id), status=doc.status)
 
 
