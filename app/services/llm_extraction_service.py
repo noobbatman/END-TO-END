@@ -1,11 +1,4 @@
-"""LLM-fallback extraction service.
-
-When regex confidence is below threshold, this service calls the Anthropic
-Claude API to extract fields from the raw OCR text using structured prompting.
-
-This is the #1 accuracy booster identified in the 2025 benchmarks:
-GPT-4o / Claude achieves highest field-level accuracy on complex layouts.
-"""
+"""LLM-fallback extraction service."""
 from __future__ import annotations
 
 import json
@@ -17,36 +10,35 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-# ── Extraction schemas per document type ──────────────────────────────────────
 _INVOICE_SCHEMA = {
-    "invoice_number":  "string — the invoice ID (e.g. INV-2024-001)",
-    "invoice_date":    "string — issue date in any format found",
-    "due_date":        "string — payment due date",
-    "vendor_name":     "string — company or person issuing the invoice",
-    "customer_name":   "string — company or person being billed",
-    "subtotal":        "number — pre-tax subtotal amount (numeric only)",
-    "tax":             "number — tax/VAT amount (numeric only)",
-    "total_amount":    "number — final total due (numeric only)",
-    "currency":        "string — currency code (GBP/USD/EUR etc.)",
-    "payment_terms":   "string — e.g. Net 30",
-    "purchase_order":  "string — PO number if present",
+    "invoice_number": "string — the invoice ID (e.g. INV-2024-001)",
+    "invoice_date": "string — issue date in any format found",
+    "due_date": "string — payment due date",
+    "vendor_name": "string — company or person issuing the invoice",
+    "customer_name": "string — company or person being billed",
+    "subtotal": "number — pre-tax subtotal amount (numeric only)",
+    "tax": "number — tax/VAT amount (numeric only)",
+    "total_amount": "number — final total due (numeric only)",
+    "currency": "string — currency code (GBP/USD/EUR etc.)",
+    "payment_terms": "string — e.g. Net 30",
+    "purchase_order": "string — PO number if present",
 }
 
 _BANK_STATEMENT_SCHEMA = {
-    "account_number":    "string — the account identifier",
-    "account_holder":    "string — name of account holder",
-    "iban":              "string — IBAN if present",
-    "sort_code":         "string — UK sort code if present",
-    "statement_period":  "string — period covered",
-    "opening_balance":   "number — balance at start of period (numeric only)",
-    "closing_balance":   "number — balance at end of period (numeric only)",
+    "account_number": "string — the account identifier",
+    "account_holder": "string — name of account holder",
+    "iban": "string — IBAN if present",
+    "sort_code": "string — UK sort code if present",
+    "statement_period": "string — period covered",
+    "opening_balance": "number — balance at start of period (numeric only)",
+    "closing_balance": "number — balance at end of period (numeric only)",
     "available_balance": "number — available balance (numeric only)",
-    "total_debits":      "number — sum of debits (numeric only)",
-    "total_credits":     "number — sum of credits (numeric only)",
+    "total_debits": "number — sum of debits (numeric only)",
+    "total_credits": "number — sum of credits (numeric only)",
 }
 
 _SCHEMAS: dict[str, dict[str, str]] = {
-    "invoice":        _INVOICE_SCHEMA,
+    "invoice": _INVOICE_SCHEMA,
     "bank_statement": _BANK_STATEMENT_SCHEMA,
 }
 
@@ -55,7 +47,6 @@ def _build_prompt(document_type: str, ocr_text: str, failed_fields: list[str]) -
     schema = _SCHEMAS.get(document_type, _INVOICE_SCHEMA)
     fields_to_extract = {k: v for k, v in schema.items() if k in failed_fields} or schema
     schema_str = json.dumps(fields_to_extract, indent=2)
-    # Truncate OCR text to avoid token limits
     truncated = ocr_text[:6000] if len(ocr_text) > 6000 else ocr_text
 
     return f"""You are a precise document field extractor. Extract ONLY the requested fields from this {document_type.replace("_", " ")} text.
@@ -77,14 +68,16 @@ JSON output:"""
 
 
 class LLMExtractionService:
-    """Optional Claude-powered extraction for fields that regex missed."""
-
     def __init__(self) -> None:
         self.settings = get_settings()
 
     @property
     def _enabled(self) -> bool:
         return bool(getattr(self.settings, "llm_extraction_enabled", False))
+
+    @property
+    def _threshold(self) -> float:
+        return float(getattr(self.settings, "low_confidence_threshold", 0.75))
 
     def extract_failed_fields(
         self,
@@ -93,15 +86,9 @@ class LLMExtractionService:
         current_fields: dict[str, Any],
         low_confidence_field_names: list[str],
     ) -> dict[str, Any]:
-        """Call LLM to fill in fields that regex extraction missed or got wrong."""
-        if not self._enabled:
-            return {}
-        if not low_confidence_field_names:
-            return {}
-        if document_type not in _SCHEMAS:
+        if not self._enabled or not low_confidence_field_names or document_type not in _SCHEMAS:
             return {}
 
-        # Only re-extract fields where value is None (regex completely failed)
         null_fields = [
             f for f in low_confidence_field_names
             if current_fields.get(f) is None and f in _SCHEMAS.get(document_type, {})
@@ -113,6 +100,7 @@ class LLMExtractionService:
 
         try:
             import anthropic
+
             client = anthropic.Anthropic()
             response = client.messages.create(
                 model="claude-haiku-4-5",
@@ -120,14 +108,9 @@ class LLMExtractionService:
                 messages=[{"role": "user", "content": prompt}],
             )
             raw = response.content[0].text.strip()
-            # Strip markdown fences if present
             raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
             extracted = json.loads(raw)
-            # Only return non-null values for requested fields
-            return {
-                k: v for k, v in extracted.items()
-                if k in null_fields and v is not None
-            }
+            return {k: v for k, v in extracted.items() if k in null_fields and v is not None}
         except Exception as exc:
             logger.warning("llm_extraction_failed", extra={"error": str(exc), "doc_type": document_type})
             return {}
@@ -137,19 +120,20 @@ class LLMExtractionService:
         document_type: str,
         ocr_text: str,
         current_fields: dict[str, Any],
-        confidence_threshold: float = 0.5,
+        confidence_threshold: float | None = None,
         field_confidences: list | None = None,
     ) -> dict[str, Any]:
-        """High-level method: enrich current_fields with LLM results for low-confidence fields."""
         if not self._enabled:
             return current_fields
 
-        low_conf_names = []
+        threshold = confidence_threshold if confidence_threshold is not None else self._threshold
+
+        low_conf_names: list[str] = []
         if field_confidences:
             low_conf_names = [
                 fc.name if hasattr(fc, "name") else fc.get("name", "")
                 for fc in field_confidences
-                if (fc.confidence if hasattr(fc, "confidence") else fc.get("confidence", 1.0)) < confidence_threshold
+                if (fc.confidence if hasattr(fc, "confidence") else fc.get("confidence", 1.0)) < threshold
             ]
 
         llm_results = self.extract_failed_fields(
@@ -162,10 +146,7 @@ class LLMExtractionService:
         if llm_results:
             enriched = dict(current_fields)
             enriched.update(llm_results)
-            logger.info(
-                "llm_enriched_fields",
-                extra={"fields": list(llm_results.keys()), "doc_type": document_type},
-            )
+            logger.info("llm_enriched_fields", extra={"fields": list(llm_results.keys()), "doc_type": document_type})
             return enriched
 
         return current_fields

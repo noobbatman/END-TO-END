@@ -1,10 +1,12 @@
-"""Webhook registration and dispatch service."""
+"""Webhook registration, dispatch, dead-letter, and replay service."""
 from __future__ import annotations
+
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import Webhook, WebhookEvent, WebhookStatus
+from app.db.models import FailedWebhookEvent, Webhook, WebhookStatus
 
 
 class WebhookService:
@@ -32,7 +34,6 @@ class WebhookService:
         return wh
 
     def dispatch_event(self, event: str, payload: dict) -> list[str]:
-        """Fire-and-forget: enqueue tasks for all active webhooks matching *event*."""
         from app.workers.tasks import dispatch_webhook_task
 
         hooks = list(
@@ -47,3 +48,53 @@ class WebhookService:
             task = dispatch_webhook_task.apply_async(args=[hook.id, event, payload])
             task_ids.append(str(task.id))
         return task_ids
+
+    def record_failed_delivery(
+        self,
+        *,
+        webhook_id: str | None,
+        webhook_url: str,
+        event: str,
+        payload: dict,
+        error_detail: str | None,
+        attempts: int,
+    ) -> FailedWebhookEvent:
+        failed = FailedWebhookEvent(
+            webhook_id=webhook_id,
+            webhook_url=webhook_url,
+            event=event,
+            payload=payload,
+            error_detail=error_detail,
+            attempts=attempts,
+        )
+        self.db.add(failed)
+        self.db.commit()
+        self.db.refresh(failed)
+        return failed
+
+    def list_failed(
+        self,
+        *,
+        event: str | None = None,
+        replayed: bool | None = None,
+        limit: int = 100,
+    ) -> list[FailedWebhookEvent]:
+        stmt = select(FailedWebhookEvent).order_by(FailedWebhookEvent.created_at.desc()).limit(limit)
+        if event:
+            stmt = stmt.where(FailedWebhookEvent.event == event)
+        if replayed is not None:
+            stmt = stmt.where(FailedWebhookEvent.replayed == replayed)
+        return list(self.db.scalars(stmt))
+
+    def replay(self, failed_id: str) -> dict:
+        from app.workers.tasks import dispatch_webhook_task
+
+        failed = self.db.get(FailedWebhookEvent, failed_id)
+        if not failed:
+            raise ValueError(f"FailedWebhookEvent {failed_id} not found.")
+
+        task = dispatch_webhook_task.apply_async(args=[failed.webhook_id, failed.event, failed.payload])
+        failed.replayed = True
+        failed.replayed_at = datetime.now(timezone.utc)
+        self.db.commit()
+        return {"task_id": str(task.id), "failed_event_id": failed_id}

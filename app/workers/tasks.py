@@ -16,29 +16,33 @@ from app.db.session import SessionLocal
 from app.services.pipeline_service import PipelineService
 from app.workers.celery_app import celery_app
 
-logger   = get_logger(__name__)
+logger = get_logger(__name__)
 settings = get_settings()
 
 
-# ── Document processing ───────────────────────────────────────────────────────
-
-def _run_processing(self: Any, document_id: str, request_id: str | None = None) -> dict:
+def _run_processing(
+    self: Any,
+    document_id: str,
+    request_id: str | None = None,
+    correlation_id: str | None = None,
+) -> dict:
     db = SessionLocal()
     try:
+        effective_correlation_id = correlation_id or request_id or str(self.request.id)
         logger.info(
             "processing_document",
             extra={
                 "document_id": document_id,
                 "task_id": self.request.id,
-                "request_id": request_id or "n/a",
+                "correlation_id": effective_correlation_id,
             },
         )
         service = PipelineService(db)
-        return service.process_document(document_id)
+        return service.process_document(document_id, correlation_id=effective_correlation_id)
     except SoftTimeLimitExceeded:
         logger.error(
             "task_soft_time_limit_exceeded",
-            extra={"document_id": document_id, "request_id": request_id},
+            extra={"document_id": document_id, "correlation_id": correlation_id},
         )
         raise
     finally:
@@ -53,8 +57,13 @@ def _run_processing(self: Any, document_id: str, request_id: str | None = None) 
     retry_kwargs={"max_retries": 3},
     name="app.workers.tasks.process_document_task",
 )
-def process_document_task(self, document_id: str, request_id: str | None = None) -> dict:
-    return _run_processing(self, document_id, request_id=request_id)
+def process_document_task(
+    self,
+    document_id: str,
+    request_id: str | None = None,
+    correlation_id: str | None = None,
+) -> dict:
+    return _run_processing(self, document_id, request_id=request_id, correlation_id=correlation_id)
 
 
 @celery_app.task(
@@ -65,24 +74,32 @@ def process_document_task(self, document_id: str, request_id: str | None = None)
     retry_kwargs={"max_retries": 5},
     name="app.workers.tasks.process_document_high_priority",
 )
-def process_document_high_priority(self, document_id: str, request_id: str | None = None) -> dict:
-    return _run_processing(self, document_id, request_id=request_id)
+def process_document_high_priority(
+    self,
+    document_id: str,
+    request_id: str | None = None,
+    correlation_id: str | None = None,
+) -> dict:
+    return _run_processing(self, document_id, request_id=request_id, correlation_id=correlation_id)
 
 
-@celery_app.task(
-    bind=True,
-    name="app.workers.tasks.batch_process_task",
-)
-def batch_process_task(self, document_ids: list[str], request_id: str | None = None) -> dict:
+@celery_app.task(bind=True, name="app.workers.tasks.batch_process_task")
+def batch_process_task(
+    self,
+    document_ids: list[str],
+    request_id: str | None = None,
+    correlation_id: str | None = None,
+) -> dict:
     results: dict[str, str] = {}
     for doc_id in document_ids:
-        task = process_document_task.apply_async(args=[doc_id], kwargs={"request_id": request_id})
+        task = process_document_task.apply_async(
+            args=[doc_id],
+            kwargs={"request_id": request_id, "correlation_id": correlation_id},
+        )
         results[doc_id] = str(task.id)
         logger.info("batch_enqueued", extra={"document_id": doc_id, "task_id": task.id})
     return {"enqueued": results}
 
-
-# ── Webhook dispatch ──────────────────────────────────────────────────────────
 
 @celery_app.task(
     bind=True,
@@ -93,8 +110,9 @@ def batch_process_task(self, document_ids: list[str], request_id: str | None = N
     name="app.workers.tasks.dispatch_webhook_task",
 )
 def dispatch_webhook_task(self, webhook_id: str, event: str, payload: dict) -> dict:
-    from app.db.models import Webhook, WebhookStatus
     from datetime import datetime, timezone
+
+    from app.db.models import Webhook, WebhookStatus
 
     db = SessionLocal()
     try:
@@ -102,7 +120,7 @@ def dispatch_webhook_task(self, webhook_id: str, event: str, payload: dict) -> d
         if not webhook or webhook.status != WebhookStatus.active:
             return {"skipped": True}
 
-        body    = json.dumps({"event": event, "payload": payload})
+        body = json.dumps({"event": event, "payload": payload})
         headers = {"Content-Type": "application/json", "X-DocintelEvent": event}
         if webhook.secret:
             sig = hmac.new(webhook.secret.encode(), body.encode(), hashlib.sha256).hexdigest()
@@ -113,7 +131,7 @@ def dispatch_webhook_task(self, webhook_id: str, event: str, payload: dict) -> d
             resp.raise_for_status()
 
         webhook.last_triggered_at = datetime.now(timezone.utc)
-        webhook.failure_count     = 0
+        webhook.failure_count = 0
         db.commit()
         webhooks_dispatched_total.labels(event=event, success="true").inc()
         logger.info("webhook_dispatched", extra={"webhook_id": webhook_id, "status": resp.status_code})
@@ -125,23 +143,43 @@ def dispatch_webhook_task(self, webhook_id: str, event: str, payload: dict) -> d
             if wh:
                 wh.failure_count += 1
                 db.commit()
+
         webhooks_dispatched_total.labels(event=event, success="false").inc()
         logger.error("webhook_failed", extra={"webhook_id": webhook_id, "error": str(exc)})
+
+        if self.request.retries >= settings.webhook_max_retries:
+            try:
+                from app.services.webhook_service import WebhookService
+
+                webhook_obj = db.get(Webhook, webhook_id)
+                webhook_url = webhook_obj.url if webhook_obj else "unknown"
+                WebhookService(db).record_failed_delivery(
+                    webhook_id=webhook_id,
+                    webhook_url=webhook_url,
+                    event=event,
+                    payload=payload,
+                    error_detail=str(exc),
+                    attempts=self.request.retries + 1,
+                )
+                logger.warning(
+                    "webhook_dead_lettered",
+                    extra={
+                        "webhook_id": webhook_id,
+                        "event": event,
+                        "attempts": self.request.retries + 1,
+                    },
+                )
+            except Exception as dl_exc:
+                logger.error("dead_letter_write_failed", extra={"error": str(dl_exc)})
         raise
     finally:
         db.close()
 
 
-# ── Email ingestion ───────────────────────────────────────────────────────────
-
-@celery_app.task(
-    bind=True,
-    name="app.workers.tasks.poll_email_task",
-)
+@celery_app.task(bind=True, name="app.workers.tasks.poll_email_task")
 def poll_email_task(self) -> dict:
-    """Poll configured IMAP mailbox and enqueue found attachments."""
-    from app.services.email_ingestion_service import EmailIngestionService
     from app.db.models import Document, DocumentStatus
+    from app.services.email_ingestion_service import EmailIngestionService
 
     svc = EmailIngestionService()
     if not svc.is_configured():
@@ -162,8 +200,8 @@ def poll_email_task(self) -> dict:
                 status=DocumentStatus.queued,
                 pipeline_version=settings.pipeline_version,
                 tags={
-                    "source":  "email",
-                    "sender":  att.get("sender", ""),
+                    "source": "email",
+                    "sender": att.get("sender", ""),
                     "subject": att.get("subject", ""),
                 },
             )

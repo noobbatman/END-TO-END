@@ -27,47 +27,51 @@ logger = get_logger(__name__)
 
 class PipelineService:
     def __init__(self, db: Session) -> None:
-        self.db              = db
-        self.audit           = AuditService(db)
-        self.review_service  = ReviewService(db)
+        self.db = db
+        self.audit = AuditService(db)
+        self.review_service = ReviewService(db)
         self.webhook_service = WebhookService(db)
-        self.storage         = get_storage_provider()
-        self.pipeline        = DocumentPipeline()
+        self.storage = get_storage_provider()
+        self.pipeline = DocumentPipeline()
 
-    def process_document(self, document_id: str) -> dict:
+    def process_document(self, document_id: str, correlation_id: str | None = None) -> dict:
         document = self.db.get(Document, document_id)
         if not document:
             raise ValueError(f"Document {document_id} not found.")
 
         tenant = tenant_label(document.tenant_id)
         started = perf_counter()
+
         document.status = DocumentStatus.processing
-        self.audit.log(document_id, AuditEventType.processing_started, payload={})
+        self.audit.log(
+            document_id=document_id,
+            event_type=AuditEventType.processing_started,
+            payload={},
+            correlation_id=correlation_id,
+        )
         self.db.commit()
 
         try:
             file_path = self._resolve_path(document.stored_path)
-            output    = self.pipeline.run(str(file_path))
+            output = self.pipeline.run(str(file_path))
 
-            # Persist extraction result
             existing = document.extraction_result
             if existing is None:
                 existing = ExtractionResult(document_id=document.id)
                 self.db.add(existing)
 
-            existing.ocr_text            = output["ocr_text"]
-            existing.raw_payload         = output["raw_payload"]
-            existing.normalized_payload  = output["normalized_payload"]
-            existing.export_payload      = output["export_payload"]
-            existing.ocr_metadata        = output["ocr_metadata"]
+            existing.ocr_text = output["ocr_text"]
+            existing.raw_payload = output["raw_payload"]
+            existing.normalized_payload = output["normalized_payload"]
+            existing.export_payload = output["export_payload"]
+            existing.ocr_metadata = output["ocr_metadata"]
             existing.extraction_metadata = output["extraction_metadata"]
-            existing.validation_results  = output["extraction_metadata"].get("validation_results", [])
+            existing.validation_results = output["extraction_metadata"].get("validation_results", [])
 
-            document.document_type        = output["document_type"]
+            document.document_type = output["document_type"]
             document.classifier_confidence = output["classifier_confidence"]
-            document.document_confidence  = output["document_confidence"]
+            document.document_confidence = output["document_confidence"]
 
-            # Clear stale review tasks
             for task in list(document.review_tasks):
                 self.db.delete(task)
             self.db.flush()
@@ -85,31 +89,34 @@ class PipelineService:
             self.storage.write_export(document.id, existing.export_payload)
 
             elapsed = perf_counter() - started
+            validation_failures = sum(
+                1 for v in existing.validation_results
+                if not v.get("valid") and not v["field"].startswith("_cross")
+            )
+
             self.audit.log(
                 document_id=document.id,
                 event_type=AuditEventType.processing_completed,
                 payload={
-                    "document_type":    document.document_type,
-                    "doc_confidence":   document.document_confidence,
-                    "review_tasks":     len(low_conf),
-                    "latency_seconds":  round(elapsed, 3),
-                    "validation_failures": sum(
-                        1 for v in existing.validation_results
-                        if not v.get("valid") and not v["field"].startswith("_cross")
-                    ),
+                    "document_type": document.document_type,
+                    "doc_confidence": document.document_confidence,
+                    "review_tasks": len(low_conf),
+                    "latency_seconds": round(elapsed, 3),
+                    "validation_failures": validation_failures,
                 },
+                correlation_id=correlation_id,
             )
             self.db.commit()
 
-            # ── Emit metrics ──────────────────────────────────────────────────
             documents_processed_total.labels(
-                status=document.status, document_type=document.document_type or "unknown", tenant_id=tenant
+                status=document.status,
+                document_type=document.document_type or "unknown",
+                tenant_id=tenant,
             ).inc()
             pipeline_latency_seconds.observe(elapsed)
             document_confidence_histogram.observe(document.document_confidence or 0.0)
             ocr_confidence_histogram.observe(output["ocr_metadata"].get("average_confidence", 0.0))
 
-            # Emit validation failure metrics
             for v in existing.validation_results:
                 if not v.get("valid") and not v["field"].startswith("_cross"):
                     field_validation_failures_total.labels(
@@ -117,33 +124,44 @@ class PipelineService:
                         field_name=v["field"],
                     ).inc()
 
-            # Fire webhooks
             self.webhook_service.dispatch_event(
                 event=str(webhook_event),
                 payload={
-                    "document_id":      document.id,
-                    "document_type":    document.document_type,
-                    "status":           document.status,
-                    "doc_confidence":   document.document_confidence,
-                    "tenant_id":        tenant,
+                    "document_id": document.id,
+                    "document_type": document.document_type,
+                    "status": document.status,
+                    "doc_confidence": document.document_confidence,
+                    "tenant_id": tenant,
+                    "correlation_id": correlation_id,
                 },
             )
 
             return output
 
         except Exception as exc:
-            document.status        = DocumentStatus.failed
+            document.status = DocumentStatus.failed
             document.error_message = str(exc)
-            self.audit.log(document_id=document.id, event_type=AuditEventType.processing_failed,
-                           payload={"error": str(exc)})
+            self.audit.log(
+                document_id=document.id,
+                event_type=AuditEventType.processing_failed,
+                payload={"error": str(exc)},
+                correlation_id=correlation_id,
+            )
             self.db.commit()
             documents_processed_total.labels(
-                status="failed", document_type=document.document_type or "unknown", tenant_id=tenant
+                status="failed",
+                document_type=document.document_type or "unknown",
+                tenant_id=tenant,
             ).inc()
             try:
                 self.webhook_service.dispatch_event(
                     event=str(WebhookEvent.processing_failed),
-                    payload={"document_id": document.id, "error": str(exc), "tenant_id": tenant},
+                    payload={
+                        "document_id": document.id,
+                        "error": str(exc),
+                        "tenant_id": tenant,
+                        "correlation_id": correlation_id,
+                    },
                 )
             except Exception:
                 pass
@@ -152,5 +170,6 @@ class PipelineService:
     def _resolve_path(self, stored_path: str) -> str:
         if stored_path.startswith("s3://"):
             from app.storage.s3 import S3StorageProvider
+
             return str(S3StorageProvider().download_to_tmp(stored_path))
         return stored_path

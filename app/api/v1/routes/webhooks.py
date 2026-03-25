@@ -1,7 +1,7 @@
-"""Webhook management routes."""
+"""Webhook management routes — registration, listing, deactivation, dead-letter replay."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, HttpUrl
 from sqlalchemy.orm import Session
 
@@ -26,7 +26,20 @@ class WebhookRead(BaseModel):
     event: str
     status: str
     failure_count: int
+    model_config = {"from_attributes": True}
 
+
+class FailedWebhookRead(BaseModel):
+    id: str
+    webhook_id: str | None
+    webhook_url: str
+    event: str
+    payload: dict
+    error_detail: str | None
+    attempts: int
+    replayed: bool
+    replayed_at: str | None
+    created_at: str
     model_config = {"from_attributes": True}
 
 
@@ -56,3 +69,40 @@ def deactivate_webhook(webhook_id: str, db: Session = Depends(db_dependency)) ->
     if not wh:
         raise HTTPException(status_code=404, detail="Webhook not found.")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/failed", response_model=list[FailedWebhookRead])
+def list_failed_webhooks(
+    event: str | None = Query(default=None),
+    replayed: bool | None = Query(default=None, description="Filter by replay status"),
+    limit: int = Query(default=100, ge=1, le=1000),
+    db: Session = Depends(db_dependency),
+) -> list[FailedWebhookRead]:
+    records = WebhookService(db).list_failed(event=event, replayed=replayed, limit=limit)
+    return [
+        FailedWebhookRead(
+            id=r.id,
+            webhook_id=r.webhook_id,
+            webhook_url=r.webhook_url,
+            event=r.event,
+            payload=r.payload,
+            error_detail=r.error_detail,
+            attempts=r.attempts,
+            replayed=r.replayed,
+            replayed_at=r.replayed_at.isoformat() if r.replayed_at else None,
+            created_at=r.created_at.isoformat(),
+        )
+        for r in records
+    ]
+
+
+@router.post("/failed/{failed_id}/replay")
+def replay_failed_webhook(
+    failed_id: str,
+    db: Session = Depends(db_dependency),
+) -> dict:
+    svc = WebhookService(db)
+    try:
+        return svc.replay(failed_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))

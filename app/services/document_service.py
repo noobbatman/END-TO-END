@@ -33,8 +33,6 @@ class DocumentService:
         self.storage = get_storage_provider()
         self.audit = AuditService(db)
 
-    # ── Upload ────────────────────────────────────────────────────────────────
-
     async def create_document(
         self,
         upload: UploadFile,
@@ -78,13 +76,8 @@ class DocumentService:
         if ct not in _ALLOWED_CONTENT_TYPES:
             raise HTTPException(
                 status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                detail=(
-                    f"Unsupported file type '{ct}'. "
-                    f"Allowed: {sorted(_ALLOWED_CONTENT_TYPES)}"
-                ),
+                detail=f"Unsupported file type '{ct}'. Allowed: {sorted(_ALLOWED_CONTENT_TYPES)}",
             )
-
-    # ── List / search ─────────────────────────────────────────────────────────
 
     def list_documents(
         self,
@@ -95,7 +88,6 @@ class DocumentService:
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[Document], int]:
-        """Return (items, total) for paginated listing with optional filters."""
         query = self._scoped_documents_query(tenant_id)
         if status:
             query = query.where(Document.status == status)
@@ -103,18 +95,23 @@ class DocumentService:
             query = query.where(Document.document_type == document_type)
 
         total = self.db.scalar(select(func.count()).select_from(query.subquery())) or 0
-        items = list(
-            self.db.scalars(
-                query.order_by(Document.created_at.desc()).offset(offset).limit(limit)
-            )
-        )
+        items = list(self.db.scalars(query.order_by(Document.created_at.desc()).offset(offset).limit(limit)))
         return items, total
 
     def search(self, query: str, *, limit: int = 20) -> list[Document]:
-        return self.search_scoped(query, limit=limit, tenant_id=None)
+        return self._search_query(query, tenant_id=None, scoped=False, limit=limit)
 
     def search_scoped(self, query: str, *, limit: int = 20, tenant_id: str | None) -> list[Document]:
-        """Keyword search across filename, document_type AND extracted OCR text."""
+        return self._search_query(query, tenant_id=tenant_id, scoped=True, limit=limit)
+
+    def _search_query(
+        self,
+        query: str,
+        *,
+        tenant_id: str | None,
+        scoped: bool,
+        limit: int,
+    ) -> list[Document]:
         like = f"%{query}%"
         stmt = (
             select(Document)
@@ -130,13 +127,9 @@ class DocumentService:
             .order_by(Document.created_at.desc())
             .limit(limit)
         )
-        if tenant_id is None:
-            stmt = stmt.where(Document.tenant_id.is_(None))
-        else:
+        if scoped and tenant_id is not None:
             stmt = stmt.where(Document.tenant_id == tenant_id)
         return list(self.db.scalars(stmt))
-
-    # ── Single document ───────────────────────────────────────────────────────
 
     def get_document(self, document_id: str, tenant_id: str | None = None) -> Document:
         stmt = self._scoped_documents_query(tenant_id).where(Document.id == document_id)
