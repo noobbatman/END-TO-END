@@ -21,7 +21,7 @@ class InvoiceExtractor(Extractor):
 
         # ── Invoice number — broad pattern to handle noisy OCR ──────────────
         invoice_number = (
-            regex_search(r"inv(?:oice)?\s*(?:number|no\.?|#|num)?\s*[:#]?\s*([A-Z0-9][A-Z0-9\-\/\._ ]{1,39})", text)
+            regex_search(r"inv(?:oice)?\s*(?:number|no\.?|#|num)\s*[:#]?\s*([A-Z0-9][A-Z0-9\-\/\._ ]{1,39})", text)
             or regex_search(r"(?:l\s*N\s*V|lnv0ice|invoice)\s*N(?:o|0)\.?\s*[:#]?\s*([A-Z0-9][A-Z0-9\-\/]+)", text)
             or regex_search(r"\b((?:INV|BILL|SI|REF|DOC)-\d{4}-\d+)\b", text)
         )
