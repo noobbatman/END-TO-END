@@ -52,6 +52,11 @@ class TestReceiptDetection:
         result = clf.classify(text)
         assert result.label == "receipt"
 
+    def test_generic_substrings_do_not_trigger_receipt(self, clf) -> None:
+        text = "Items were stored after the position changed during processing."
+        result = clf.classify(text)
+        assert result.label == "unknown"
+
 
 class TestContractDetection:
     def test_basic_contract(self, clf) -> None:
@@ -69,6 +74,7 @@ class TestUnknownDocument:
     def test_gibberish_returns_unknown(self, clf) -> None:
         result = clf.classify("xyzzy lorem ipsum dolor sit amet consectetur")
         assert result.label == "unknown"
+
 
 
 class TestConfidenceRange:

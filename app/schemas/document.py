@@ -39,6 +39,7 @@ class ExtractionResultRead(BaseModel):
     low_confidence_fields: list[FieldConfidence]
     ocr_metadata: OCRMetadata
     extraction_metadata: dict[str, Any]
+    detected_document_type: str | None = None
 
 
 class DocumentDetail(BaseModel):

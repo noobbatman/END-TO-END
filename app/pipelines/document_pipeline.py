@@ -51,12 +51,28 @@ class DocumentPipeline:
         if extracted.document_type in ("invoice", "receipt"):
             line_items = extract_line_items(ocr_result, stored_path=path)
 
-        # 6. Optional LLM enrichment for low-confidence fields
+        detected_document_type: str | None = None
+
+        # 6a. Optional full LLM extraction for unknown document types
         fields = dict(extracted.fields)
         try:
             from app.services.llm_extraction_service import LLMExtractionService
             llm_svc = LLMExtractionService()
-            if llm_svc._enabled:
+            if classification.label == "unknown" and llm_svc._unknown_enabled:
+                llm_result = llm_svc.enrich_fields(
+                    document_type="unknown",
+                    ocr_text=normalized_text,
+                    current_fields=fields,
+                    field_confidences=[],
+                )
+                if llm_result:
+                    fields = dict(llm_result)
+                    detected_document_type = fields.pop("detected_type", None)
+                    if detected_document_type:
+                        extracted.document_type = detected_document_type
+
+            # 6b. Optional LLM enrichment for low-confidence fields on known types
+            if llm_svc._enabled and extracted.document_type != "unknown":
                 pre_scored = self.scorer.score_fields(
                     fields=fields,
                     snippets=snippets,
@@ -110,6 +126,7 @@ class DocumentPipeline:
 
         export_payload = {
             "document_type":      extracted.document_type,
+            "detected_document_type": detected_document_type,
             "schema_version":     "2.0",
             "source_file":        Path(path).name,
             "fields":             fields,
@@ -123,6 +140,7 @@ class DocumentPipeline:
 
         return {
             "document_type":         extracted.document_type,
+            "detected_document_type": detected_document_type,
             "classifier_confidence": classification.confidence,
             "document_confidence":   document_confidence,
             "ocr_text":              raw_text,
@@ -144,6 +162,7 @@ class DocumentPipeline:
             "extraction_metadata": {
                 "field_snippets":     snippets,
                 "required_fields":    required_fields,
+                "extraction_mode":    extracted.metadata.get("extraction_mode"),
                 "pipeline_version":   self.settings.pipeline_version,
                 "validation_results": validation_results,
                 "line_item_count":    len(line_items),

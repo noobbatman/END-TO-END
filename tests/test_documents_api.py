@@ -5,6 +5,7 @@ from io import BytesIO
 from unittest.mock import MagicMock, patch
 
 from app.api.deps import db_dependency
+from app.db.models import Document, DocumentStatus, ExtractionResult
 from app.main import app
 
 
@@ -180,6 +181,42 @@ def test_get_document_status(client, monkeypatch) -> None:
     status_resp = client.get(f"/api/v1/documents/{doc_id}/status")
     assert status_resp.status_code == 200
     assert status_resp.json()["document_id"] == doc_id
+
+
+def test_get_document_detail_includes_detected_document_type(client, db_session) -> None:
+    document = Document(
+        filename="notes.pdf",
+        stored_path="data/uploads/notes.pdf",
+        content_type="application/pdf",
+        status=DocumentStatus.completed,
+        document_type="unknown",
+        pipeline_version="0.3.0",
+    )
+    db_session.add(document)
+    db_session.flush()
+    db_session.add(
+        ExtractionResult(
+            document_id=document.id,
+            ocr_text="project notes",
+            raw_payload={},
+            normalized_payload={},
+            export_payload={
+                "document_type": "unknown",
+                "detected_document_type": "study_notes",
+                "fields": {"topic": "classification"},
+                "field_confidences": [],
+            },
+            ocr_metadata={"average_confidence": 0.9, "page_count": 1, "engine": "mock"},
+            extraction_metadata={"required_fields": [], "extraction_mode": "llm_open_ended"},
+            validation_results=[],
+        )
+    )
+    db_session.commit()
+
+    response = client.get(f"/api/v1/documents/{document.id}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["result"]["detected_document_type"] == "study_notes"
 
 
 # ── Search ────────────────────────────────────────────────────────────────────

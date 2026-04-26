@@ -81,6 +81,7 @@ class Settings(BaseSettings):
 
     # ── LLM Extraction (optional) ─────────────────────────────────────────────
     llm_extraction_enabled: bool = Field(default=False, alias="LLM_EXTRACTION_ENABLED")
+    llm_unknown_extraction_enabled: bool = Field(default=True, alias="LLM_UNKNOWN_EXTRACTION_ENABLED")
 
     # ── Email Ingestion (optional) ────────────────────────────────────────────
     email_imap_host:               str = Field(default="", alias="EMAIL_IMAP_HOST")
@@ -114,6 +115,12 @@ class Settings(BaseSettings):
             warnings.warn(
                 "LLM_EXTRACTION_ENABLED=true but ANTHROPIC_API_KEY is not set. "
                 "LLM fallback extraction will be skipped.",
+                stacklevel=2,
+            )
+        if self.llm_unknown_extraction_enabled and not os.environ.get("ANTHROPIC_API_KEY"):
+            warnings.warn(
+                "LLM_UNKNOWN_EXTRACTION_ENABLED=true but ANTHROPIC_API_KEY is not set. "
+                "Unknown-document LLM extraction will be skipped.",
                 stacklevel=2,
             )
         if self.app_env == "production" and self.allowed_origins == ["*"]:

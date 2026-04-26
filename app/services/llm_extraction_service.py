@@ -43,6 +43,21 @@ _SCHEMAS: dict[str, dict[str, str]] = {
 }
 
 
+def _build_unknown_prompt(ocr_text: str) -> str:
+    truncated = ocr_text[:3000] if len(ocr_text) > 3000 else ocr_text
+    return f"""You are a document analysis assistant.
+Given the following document text, do two things:
+1. Identify the document type (e.g. "browser_extension_plan", "study_notes", "payslip", "medical_report")
+2. Extract all meaningful structured fields you can find
+
+Return JSON only. Example:
+{{"detected_type": "technical_plan", "project_name": "...", "api_used": "...", "timeline_weeks": 5}}
+
+Document text:
+{truncated}
+"""
+
+
 def _build_prompt(document_type: str, ocr_text: str, failed_fields: list[str]) -> str:
     schema = _SCHEMAS.get(document_type, _INVOICE_SCHEMA)
     fields_to_extract = {k: v for k, v in schema.items() if k in failed_fields} or schema
@@ -79,6 +94,36 @@ class LLMExtractionService:
     def _threshold(self) -> float:
         return float(getattr(self.settings, "low_confidence_threshold", 0.75))
 
+    @property
+    def _unknown_enabled(self) -> bool:
+        return bool(getattr(self.settings, "llm_unknown_extraction_enabled", True))
+
+    def _call_llm(self, prompt: str, *, max_tokens: int = 512) -> dict[str, Any]:
+        import anthropic
+
+        client = anthropic.Anthropic()
+        response = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
+        return json.loads(raw)
+
+    def _extract_unknown_document(self, ocr_text: str) -> dict[str, Any]:
+        if not self._unknown_enabled:
+            return {}
+
+        prompt = _build_unknown_prompt(ocr_text)
+        try:
+            extracted = self._call_llm(prompt, max_tokens=768)
+            if isinstance(extracted, dict):
+                return extracted
+        except Exception as exc:
+            logger.warning("llm_unknown_extraction_failed", extra={"error": str(exc)})
+        return {}
+
     def extract_failed_fields(
         self,
         document_type: str,
@@ -99,17 +144,7 @@ class LLMExtractionService:
         prompt = _build_prompt(document_type, ocr_text, null_fields)
 
         try:
-            import anthropic
-
-            client = anthropic.Anthropic()
-            response = client.messages.create(
-                model="claude-haiku-4-5",
-                max_tokens=512,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            raw = response.content[0].text.strip()
-            raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
-            extracted = json.loads(raw)
+            extracted = self._call_llm(prompt)
             return {k: v for k, v in extracted.items() if k in null_fields and v is not None}
         except Exception as exc:
             logger.warning("llm_extraction_failed", extra={"error": str(exc), "doc_type": document_type})
@@ -123,6 +158,9 @@ class LLMExtractionService:
         confidence_threshold: float | None = None,
         field_confidences: list | None = None,
     ) -> dict[str, Any]:
+        if document_type == "unknown":
+            return self._extract_unknown_document(ocr_text)
+
         if not self._enabled:
             return current_fields
 

@@ -37,8 +37,8 @@ _KEYWORDS: dict[str, list[str]] = {
     ],
     "receipt": [
         "receipt", "thank you for your purchase", "total paid",
-        "change", "cashier", "pos", "store", "payment method",
-        "visa", "mastercard", "cash", "change due",
+        "change due", "cashier", "payment method", "items purchased",
+        "amount tendered",
     ],
     "contract": [
         "agreement", "whereas", "hereby", "party", "parties",
@@ -120,7 +120,21 @@ class HybridDocumentClassifier(DocumentClassifier):
         best_label = max(combined, key=combined.__getitem__)
         raw_score  = combined[best_label]
         total      = sum(combined.values()) or 1.0
-        confidence = min(0.98, max(0.25, raw_score / total + 0.15))
+        dominance = raw_score / total
+
+        if raw_score < 0.015 or dominance < 0.40:
+            return ClassificationResult(
+                label="unknown",
+                confidence=0.2,
+                rationale={
+                    "keyword_scores": keyword_scores,
+                    "pattern_scores": pattern_scores,
+                    "fuzzy_scores":   fuzzy_scores,
+                    "combined_scores": combined,
+                },
+            )
+
+        confidence = min(0.98, max(0.25, dominance + 0.15))
 
         return ClassificationResult(
             label=best_label,
@@ -140,7 +154,7 @@ class HybridDocumentClassifier(DocumentClassifier):
         word_count = max(len(text.split()), 1)
         for label, keywords in _KEYWORDS.items():
             for kw in keywords:
-                count = text.count(kw)
+                count = len(re.findall(r"\b" + re.escape(kw) + r"\b", text))
                 if count:
                     tf = count / word_count
                     idf = _IDF.get(kw, 1.0)
@@ -163,11 +177,11 @@ class HybridDocumentClassifier(DocumentClassifier):
         """
         from rapidfuzz import fuzz
 
-        exact_hits = set(self._keyword_score(text))
+        exact_scores = self._keyword_score(text)
         scores: dict[str, float] = defaultdict(float)
 
         for label, keywords in _KEYWORDS.items():
-            if label in exact_hits:
+            if exact_scores.get(label, 0.0) <= 0:
                 continue
 
             for kw in keywords:

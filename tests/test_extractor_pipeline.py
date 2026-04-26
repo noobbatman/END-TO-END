@@ -61,6 +61,18 @@ class TestReceiptExtractor:
         assert result.document_type == "receipt"
         assert result.fields.get("total_amount") is not None
 
+    def test_extracts_multiline_store_date_and_tax(self) -> None:
+        text = (
+            "BARDS QUILL\n"
+            "Date: 08 Jul 2024\n"
+            "VAT (20% incl.): 2.61\n"
+            "Total Paid: 15.00\n"
+        )
+        result = get_extractor("receipt").extract(_make_ocr(text))
+        assert result.fields.get("store_name") == "BARDS QUILL"
+        assert result.fields.get("receipt_date") == "08 Jul 2024"
+        assert result.fields.get("tax") == 2.61
+
 
 class TestContractExtractor:
     def test_extracts_parties(self) -> None:
@@ -74,6 +86,7 @@ class TestUnknownExtractor:
     def test_returns_unknown_type(self) -> None:
         result = get_extractor("unknown").extract(_make_ocr("some text"))
         assert result.document_type == "unknown"
+        assert result.metadata.get("extraction_mode") == "llm_open_ended"
 
 
 class TestExtractorFactory:

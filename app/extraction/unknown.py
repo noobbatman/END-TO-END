@@ -10,6 +10,9 @@ class UnknownExtractor(Extractor):
             fields={},
             entities=extract_entities(ocr_result),
             tables=[],
-            metadata={"field_snippets": {}, "required_fields": []},
+            metadata={
+                "field_snippets": {},
+                "required_fields": [],
+                "extraction_mode": "llm_open_ended",
+            },
         )
-

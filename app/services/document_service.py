@@ -154,6 +154,7 @@ class DocumentService:
                 ],
                 ocr_metadata=OCRMetadata(**document.extraction_result.ocr_metadata),
                 extraction_metadata=document.extraction_result.extraction_metadata,
+                detected_document_type=document.extraction_result.export_payload.get("detected_document_type"),
             )
         return DocumentDetail(
             document=DocumentRead.model_validate(document),

@@ -1,4 +1,5 @@
 """Receipt extractor."""
+import re
 from typing import Any
 
 from app.extraction.base import ExtractionOutput, Extractor
@@ -11,13 +12,14 @@ class ReceiptExtractor(Extractor):
     def extract(self, ocr_result: OCRResult) -> ExtractionOutput:
         text = ocr_result.text
 
-        store_name = regex_search(r"^([A-Z][A-Za-z0-9 &\.\-]{2,40})$", text, flags=0)
+        store_name = regex_search(r"^([A-Z][A-Za-z0-9 &\.\-]{2,40})$", text, flags=re.MULTILINE)
         receipt_date = regex_search(
-            r"(?:date|time)\s*[:#]?\s*([0-9]{1,2}[\/\-\.][0-9]{1,2}[\/\-\.][0-9]{2,4})", text
+            r"(?:date|time)\s*[:#]?\s*([0-9]{1,2}[\s\/\-\.][A-Za-z]{3,9}[\s\/\-\.][0-9]{2,4}|[0-9]{1,2}[\/\-\.][0-9]{1,2}[\/\-\.][0-9]{2,4})",
+            text,
         )
         receipt_number = regex_search(r"(?:receipt|txn|transaction)\s*(?:no\.?|#|number)?\s*[:#]?\s*([A-Z0-9\-]+)", text)
         subtotal = normalize_amount(regex_search(r"subtotal\s*[:#]?\s*([$€£]?\s?[\d,]+\.\d{2})", text))
-        tax = normalize_amount(regex_search(r"(?:tax|vat|gst)\s*[:#]?\s*([$€£]?\s?[\d,]+\.\d{2})", text))
+        tax = normalize_amount(regex_search(r"(?:tax|vat|gst)[^\n]{0,30}?([$€£]?\s?[\d,]+\.\d{2})", text))
         total = normalize_amount(
             regex_search(r"(?:total(?:\s+paid)?|amount\s+paid|grand\s+total)\s*[:#]?\s*([$€£]?\s?[\d,]+\.\d{2})", text)
         )

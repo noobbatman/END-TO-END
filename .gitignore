@@ -19,3 +19,4 @@ data/exports/*
 postgres_data/
 redis_data/
 aws/rendered/
+.claude/
