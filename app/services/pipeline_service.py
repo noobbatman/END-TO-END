@@ -53,7 +53,10 @@ class PipelineService:
 
         try:
             file_path = self._resolve_path(document.stored_path)
-            output = self.pipeline.run(str(file_path))
+            try:
+                output = self.pipeline.run(str(file_path))
+            finally:
+                self._cleanup_tmp(str(file_path), document.stored_path)
 
             existing = document.extraction_result
             if existing is None:
@@ -163,8 +166,11 @@ class PipelineService:
                         "correlation_id": correlation_id,
                     },
                 )
-            except Exception:
-                pass
+            except Exception as wh_exc:
+                logger.warning(
+                    "webhook_dispatch_failed_after_processing_error",
+                    extra={"document_id": document.id, "error": str(wh_exc)},
+                )
             raise
 
     def _resolve_path(self, stored_path: str) -> str:
@@ -173,3 +179,11 @@ class PipelineService:
 
             return str(S3StorageProvider().download_to_tmp(stored_path))
         return stored_path
+
+    def _cleanup_tmp(self, path: str, stored_path: str) -> None:
+        if stored_path.startswith("s3://"):
+            import os
+            try:
+                os.unlink(path)
+            except OSError:
+                pass

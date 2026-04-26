@@ -129,8 +129,12 @@ class DeduplicationService:
         if not inv_num:
             return None
 
+        # Select only the payload column to avoid N+1 lazy-loads on extraction_result.
+        # Vendor-agnostic: invoice numbers should be globally unique within a tenant.
+        from sqlalchemy.orm import joinedload
         stmt = (
             select(Document)
+            .options(joinedload(Document.extraction_result))
             .join(Document.extraction_result)
             .where(
                 and_(
@@ -162,9 +166,13 @@ class DeduplicationService:
         except (TypeError, ValueError):
             return None
 
-        # Get historical totals for this vendor
+        vendor_prefix = vendor[:20].lower()
+
+        # Select only the JSON payload column — avoids loading full ORM objects and
+        # removes the .limit(100) that silently discarded legitimate vendor history
+        # whenever there were more than 100 completed documents in the database.
         stmt = (
-            select(ExtractionResult)
+            select(ExtractionResult.export_payload)
             .join(Document, Document.id == ExtractionResult.document_id)
             .where(
                 and_(
@@ -172,17 +180,14 @@ class DeduplicationService:
                     Document.status == DocumentStatus.completed,
                 )
             )
-            .limit(100)
         )
-        payloads = list(self.db.scalars(stmt))
         historical = []
-        for extraction in payloads:
+        for payload in self.db.scalars(stmt):
             try:
-                payload = extraction.export_payload or {}
-                payload_vendor = str(payload.get("fields", {}).get("vendor_name", ""))
-                if vendor[:20].lower() not in payload_vendor.lower():
+                payload_vendor = str((payload or {}).get("fields", {}).get("vendor_name", ""))
+                if vendor_prefix not in payload_vendor.lower():
                     continue
-                value = float(payload.get("fields", {}).get("total_amount", 0) or 0)
+                value = float((payload or {}).get("fields", {}).get("total_amount", 0) or 0)
                 if value > 0:
                     historical.append(value)
             except (TypeError, ValueError):
@@ -220,10 +225,13 @@ class DeduplicationService:
         if not vendor:
             return None
 
+        vendor_prefix = vendor[:20].lower()
         cutoff = datetime.now(timezone.utc) - timedelta(hours=self.VELOCITY_WINDOW_HOURS)
+
+        # Select only the payload column to avoid N+1 lazy-loads when iterating candidates.
         stmt = (
-            select(Document)
-            .join(Document.extraction_result)
+            select(ExtractionResult.export_payload)
+            .join(Document, Document.id == ExtractionResult.document_id)
             .where(
                 and_(
                     Document.id != document.id,
@@ -231,15 +239,11 @@ class DeduplicationService:
                 )
             )
         )
-        count = 0
-        for candidate in self.db.scalars(stmt):
-            payload_vendor = (
-                str(candidate.extraction_result.export_payload.get("fields", {}).get("vendor_name", ""))
-                if candidate.extraction_result
-                else ""
-            )
-            if vendor[:20].lower() in payload_vendor.lower():
-                count += 1
+        count = sum(
+            1 for payload in self.db.scalars(stmt)
+            if vendor_prefix in str((payload or {}).get("fields", {}).get("vendor_name", "")).lower()
+        )
+
         if count >= self.VELOCITY_MAX_PER_VENDOR:
             return {
                 "type":     "vendor_velocity",

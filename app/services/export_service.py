@@ -60,7 +60,7 @@ class ExportService:
         since: datetime | None = None,
         limit: int = 10_000,
     ) -> list[Document]:
-        stmt = select(Document)
+        stmt = select(Document).where(Document.deleted_at.is_(None))
         if document_type:
             stmt = stmt.where(Document.document_type == document_type)
         if status:

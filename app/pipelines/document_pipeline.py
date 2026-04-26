@@ -7,12 +7,15 @@ from typing import Any
 
 from app.classification.hybrid_classifier import HybridDocumentClassifier
 from app.core.config import get_settings
+from app.core.logging import get_logger
 from app.extraction.factory import get_extractor
 from app.extraction.line_items import extract_line_items
 from app.ocr.factory import get_ocr_provider
 from app.pipelines.confidence import ConfidenceScorer
 from app.utils.text import normalize_ocr_artifacts
 from app.utils.validators import run_validators
+
+logger = get_logger(__name__)
 
 
 class DocumentPipeline:
@@ -67,8 +70,8 @@ class DocumentPipeline:
                     current_fields=fields,
                     field_confidences=pre_scored,
                 )
-        except Exception:
-            pass
+        except Exception as llm_exc:
+            logger.warning("llm_enrichment_failed", extra={"error": str(llm_exc)})
 
         # 7. Field validation
         validation_results = run_validators(extracted.document_type, fields)

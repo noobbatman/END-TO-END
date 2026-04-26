@@ -29,48 +29,54 @@ def overview_metrics(
     if cached is not None:
         return cached
 
-    q = select(Document)
+    base_filter = [Document.deleted_at.is_(None)]
     if tenant_id:
-        q = q.where(Document.tenant_id == tenant_id)
-    q = q.where(Document.deleted_at.is_(None))
+        base_filter.append(Document.tenant_id == tenant_id)
 
-    docs = list(db.scalars(q))
-    by_status: dict[str, int] = {}
-    by_type: dict[str, int] = {}
-    conf_sum, conf_count = 0.0, 0
+    # Aggregate counts grouped by status — avoids loading every row into Python.
+    status_rows = db.execute(
+        select(Document.status, func.count(Document.id))
+        .where(*base_filter)
+        .group_by(Document.status)
+    ).all()
+    by_status = {row[0]: row[1] for row in status_rows}
+    total_documents = sum(by_status.values())
 
-    for d in docs:
-        by_status[d.status] = by_status.get(d.status, 0) + 1
-        if d.document_type:
-            by_type[d.document_type] = by_type.get(d.document_type, 0) + 1
-        if d.document_confidence is not None:
-            conf_sum += d.document_confidence
-            conf_count += 1
+    # Aggregate counts grouped by document type.
+    type_rows = db.execute(
+        select(Document.document_type, func.count(Document.id))
+        .where(*base_filter, Document.document_type.isnot(None))
+        .group_by(Document.document_type)
+    ).all()
+    by_type = {row[0]: row[1] for row in type_rows}
 
-    pending_review_stmt = (
+    # Average confidence in a single aggregate query.
+    avg_conf = db.scalar(
+        select(func.avg(Document.document_confidence))
+        .where(*base_filter, Document.document_confidence.isnot(None))
+    )
+
+    pending_review = db.scalar(
         select(func.count(ReviewTask.id))
         .join(Document, Document.id == ReviewTask.document_id)
-        .where(ReviewTask.status == ReviewStatus.pending, Document.deleted_at.is_(None))
-    )
-    if tenant_id:
-        pending_review_stmt = pending_review_stmt.where(Document.tenant_id == tenant_id)
-    pending_review = db.scalar(pending_review_stmt) or 0
+        .where(ReviewTask.status == ReviewStatus.pending, *base_filter)
+    ) or 0
 
-    corrections_stmt = (
+    corrections_filter = [Document.deleted_at.is_(None)]
+    if tenant_id:
+        corrections_filter.append(Document.tenant_id == tenant_id)
+    total_corrections = db.scalar(
         select(func.count(CorrectionRecord.id))
         .join(Document, Document.id == CorrectionRecord.document_id)
-        .where(Document.deleted_at.is_(None))
-    )
-    if tenant_id:
-        corrections_stmt = corrections_stmt.where(Document.tenant_id == tenant_id)
-    total_corrections = db.scalar(corrections_stmt) or 0
+        .where(*corrections_filter)
+    ) or 0
 
     result = {
         "tenant_id": tenant_id or "all",
-        "total_documents": len(docs),
+        "total_documents": total_documents,
         "by_status": by_status,
         "by_document_type": by_type,
-        "avg_document_confidence": round(conf_sum / conf_count, 4) if conf_count else None,
+        "avg_document_confidence": round(avg_conf, 4) if avg_conf is not None else None,
         "pending_review_tasks": pending_review,
         "total_corrections": total_corrections,
     }
@@ -148,7 +154,9 @@ def tenant_audit(
     db: Session = Depends(db_dependency),
 ) -> list[dict]:
     stmt = select(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit)
-    if tenant_id:
+    if tenant_id is None:
+        stmt = stmt.where(AuditLog.tenant_id.is_(None))
+    else:
         stmt = stmt.where(AuditLog.tenant_id == tenant_id)
     logs = list(db.scalars(stmt))
     return [
