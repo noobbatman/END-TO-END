@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(brew --prefix tesseract)",
+      "Bash(brew list *)",
+      "Read(//opt/homebrew/bin/**)",
+      "Read(//usr/local/**)",
+      "Read(//opt/homebrew/opt/**)",
+      "Bash(brew --version)"
+    ]
+  }
+}

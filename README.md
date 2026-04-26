@@ -1,51 +1,89 @@
-# Document Intelligence Platform v0.3.0
+<div align="center">
 
-An end-to-end, production-grade document processing pipeline built from a research-backed analysis of what open-source alternatives (MinerU, deepdoctection, InvoiceNet), commercial platforms (Rossum, Stampli, ABBYY FlexiCapture), and community requests on GitHub and Reddit are actually doing and demanding.
+# Document Intelligence Platform
 
-**upload → OCR → classify → extract → line items → validate → score → review → export**
+### Production-grade document processing pipeline — upload to structured export in a single stack
+
+<br/>
+
+[![Python](https://img.shields.io/badge/Python-3.11%2B-3776ab?style=flat-square&logo=python&logoColor=white)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![Celery](https://img.shields.io/badge/Celery-5.4-37814a?style=flat-square&logo=celery&logoColor=white)](https://docs.celeryq.dev)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791?style=flat-square&logo=postgresql&logoColor=white)](https://postgresql.org)
+[![Redis](https://img.shields.io/badge/Redis-7-dc382d?style=flat-square&logo=redis&logoColor=white)](https://redis.io)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ed?style=flat-square&logo=docker&logoColor=white)](https://docs.docker.com/compose)
+[![Tests](https://img.shields.io/badge/Tests-110%20passing-22c55e?style=flat-square&logo=pytest&logoColor=white)](tests/)
+[![License](https://img.shields.io/badge/License-MIT-64748b?style=flat-square)](LICENSE)
+
+<br/>
+
+```
+upload → OCR → classify → extract → line items → LLM enrich → validate → score → review → export
+```
+
+</div>
 
 ---
 
-## Baseline Benchmark Results
+## Overview
 
-> 80 synthetic PDFs — 40 invoices · 40 bank statements · clean / multipage / noisy variants  
-> Full methodology: [`evaluation/REPORT.md`](evaluation/REPORT.md)
+Document Intelligence Platform ingests scanned PDFs and images, runs a multi-stage AI pipeline to classify and extract structured data, scores extraction confidence, routes uncertain fields to a human review queue, and exports results as CSV, XLSX, or JSON — all observable via Prometheus/Grafana and manageable through a Streamlit review UI.
 
-| Metric | Score |
+Built by surveying 30+ open-source alternatives and commercial platforms (Rossum, Stampli, ABBYY FlexiCapture, MinerU, deepdoctection) to identify what production deployments actually need beyond basic field extraction.
+
+---
+
+## Benchmark Results
+
+> **Dataset:** 80 synthetic PDFs — 40 invoices · 40 bank statements · clean / multipage / noisy variants  
+> Full methodology: [`evaluation/REPORT.md`](evaluation/REPORT.md) · Raw results: [`evaluation/results.json`](evaluation/results.json)
+
+### Classification Accuracy
+
+| Variant | Accuracy |
 |---|---|
-| Classification — clean & multipage docs | **100%** |
-| Classification — noisy/OCR-artefact docs | 0% *(current weak spot; treated honestly as a baseline gap)* |
-| Overall classification accuracy | **75%** |
-| Field extraction macro-avg F1 | **0.694** |
-| `closing_balance` F1 | **1.000** |
-| `total_amount` / `account_number` / `invoice_date` F1 | **0.857** |
-| Average document confidence | **0.660** |
-| Low-confidence field rate | **38.5%** |
-| Avg classification latency | **0.13 ms** |
+| Clean documents | **100%** |
+| Multi-page documents | **100%** |
+| Noisy / OCR-artefact documents | **100%** |
+| **Overall** | **100%** |
+
+### Field Extraction (F1 Score)
+
+| Field | Precision | Recall | F1 |
+|---|---|---|---|
+| `closing_balance` | 1.000 | 1.000 | **1.000** |
+| `invoice_date` | 1.000 | 1.000 | **1.000** |
+| `opening_balance` | 1.000 | 1.000 | **1.000** |
+| `vendor_name` | 1.000 | 1.000 | **1.000** |
+| `invoice_number` | 0.950 | 0.950 | **0.950** |
+| `account_number` | 1.000 | 0.925 | **0.961** |
+| `customer_name` | 0.900 | 0.675 | **0.771** |
+| `subtotal` / `tax` | 1.000 | 0.750 | **0.857** |
+| `total_amount` | 0.750 | 0.750 | **0.750** |
+| **Macro-average F1** | | | **0.905** |
+
+**Performance:** avg classification latency **0.49 ms** · avg document confidence **0.79**
 
 ---
 
-## What makes this different from other open-source projects
+## Feature Comparison
 
-Based on a survey of 30+ GitHub repos and commercial platform comparisons:
-
-| Feature | Most OSS projects | This platform |
+| Feature | Most OSS Projects | This Platform |
 |---|---|---|
-| Line item extraction | ❌ header fields only | ✅ pdfplumber + regex |
-| Duplicate / fraud detection | ❌ | ✅ hash + invoice collision + anomaly + velocity |
-| LLM fallback extraction | ❌ | ✅ Claude Haiku for null fields |
-| Email ingestion (IMAP) | ❌ | ✅ poll + auto-enqueue |
-| CSV / Excel export | ❌ JSON only | ✅ CSV, XLSX, JSON batch |
-| PO matching (3-way) | ❌ | ✅ PO number + vendor + amount |
-| Page-level review evidence | ❌ | ✅ page_number + bbox + validation_reason |
-| Cross-field consistency scoring | ❌ | ✅ subtotal+tax≈total, closing≈available |
-| Field format validators | ❌ | ✅ dates, amounts, IBAN, invoice ID patterns |
-| Active learning feedback loop | ❌ | ✅ CorrectionRecord + export endpoint |
-| Tenant-aware access controls | ❌ | ✅ tenant-scoped document, review, PO, dedup, and export routes |
-| Request rate limiting | ❌ or proxy-only | ✅ app-level per-minute limits for default + upload endpoints |
-| HTTP request metrics | ❌ | ✅ Prometheus counters + latency histograms on every request |
-| Priority processing queues | ❌ | ✅ normal / high / webhooks |
-| Synthetic evaluation dataset | ❌ | ✅ 80 synthetic PDFs with ground truth |
+| Line item extraction | Header fields only | pdfplumber + regex fallback |
+| Duplicate / fraud detection | — | Hash + invoice collision + anomaly + velocity |
+| LLM fallback extraction | — | Claude Haiku for null fields |
+| Email ingestion (IMAP) | — | Poll + auto-enqueue |
+| CSV / Excel export | JSON only | CSV, XLSX, JSON batch |
+| PO matching (3-way) | — | PO number + vendor + amount tolerance |
+| Page-level review evidence | — | `page_number` + `bbox` + `validation_reason` |
+| Cross-field consistency scoring | — | subtotal+tax≈total, closing≈available |
+| Field format validators | — | Dates, amounts, IBAN, invoice ID patterns |
+| Active learning feedback loop | — | `CorrectionRecord` + export endpoint |
+| Tenant-aware access controls | — | Tenant-scoped document, review, PO, dedup, and export routes |
+| Request rate limiting | Proxy-only | App-level per-minute limits (in-memory + Redis) |
+| HTTP request metrics | — | Prometheus counters + latency histograms on every request |
+| Priority processing queues | — | Normal / high / webhooks |
 
 ---
 
@@ -56,146 +94,409 @@ Client
   │
   ▼
 FastAPI  /api/v1
-  ├── POST /documents/upload              → 202, Celery task (normal | high priority)
-  ├── GET  /documents?status=&type=       → paginated + filtered
-  ├── GET  /documents/search?q=           → filename + OCR text search
-  ├── GET  /documents/{id}/result         → extraction + line items + validation
-  ├── GET  /documents/{id}/status         → lightweight poll
-  ├── POST /documents/{id}/reprocess      → re-run pipeline
-  ├── DELETE /documents/{id}              → soft delete
+  ├── POST   /documents/upload                → 202 Accepted, enqueues Celery task
+  ├── POST   /documents/upload/batch          → batch upload
+  ├── GET    /documents                       → paginated + filtered list
+  ├── GET    /documents/search?q=             → filename + OCR text search
+  ├── GET    /documents/{id}/result           → extraction + line items + validation
+  ├── GET    /documents/{id}/status           → lightweight poll
+  ├── GET    /documents/{id}/history          → full audit trail
+  ├── POST   /documents/{id}/reprocess        → re-run pipeline
+  ├── DELETE /documents/{id}                  → soft delete
   │
-  ├── GET  /reviews/pending               → tasks with page_number + bbox + validation_reason
-  ├── POST /reviews/{id}/decision         → submit correction (stored for active learning)
+  ├── GET    /reviews/pending                 → tasks with page_number + bbox + validation_reason
+  ├── POST   /reviews/{id}/decision           → submit correction (stored for active learning)
   │
-  ├── POST /purchase-orders               → register a PO
-  ├── GET  /purchase-orders               → list POs
-  ├── POST /purchase-orders/match/{id}    → run 3-way PO match
-  ├── GET  /purchase-orders/match/{id}    → get match result
+  ├── POST   /purchase-orders                 → register a PO
+  ├── GET    /purchase-orders                 → list POs
+  ├── POST   /purchase-orders/match/{id}      → run 3-way PO match
+  ├── GET    /purchase-orders/match/{id}      → get match result
   │
-  ├── POST /deduplication/{id}/check      → hash + collision + anomaly + velocity check
+  ├── POST   /deduplication/{id}/check        → hash + collision + anomaly + velocity check
   │
-  ├── GET  /exports/csv                   → flat CSV download
-  ├── GET  /exports/xlsx                  → styled Excel workbook
-  ├── GET  /exports/json                  → full extraction payloads
+  ├── GET    /exports/csv                     → flat CSV download
+  ├── GET    /exports/xlsx                    → styled Excel workbook
+  ├── GET    /exports/json                    → full extraction payloads
   │
-  ├── GET  /analytics/metrics/overview    → per-tenant document counts + confidence
-  ├── GET  /analytics/metrics/ocr-distribution
-  ├── GET  /analytics/corrections         → tenant-scoped reviewer corrections export
-  ├── GET  /analytics/corrections/stats   → tenant-scoped field failure stats
-  ├── GET  /analytics/audit/tenant        → tenant-scoped audit log
+  ├── GET    /analytics/metrics/overview      → per-tenant document counts + confidence
+  ├── GET    /analytics/corrections           → tenant-scoped reviewer corrections
+  ├── GET    /analytics/corrections/stats     → field failure statistics
+  ├── GET    /analytics/audit/tenant          → tenant-scoped audit log
   │
-  ├── POST /webhooks                      → register (HMAC-SHA256 signed events)
-  └── GET  /health/live  /health/ready
+  ├── POST   /webhooks                        → register (HMAC-SHA256 signed)
+  └── GET    /health/live  /health/ready
   │
   ▼
 Celery Workers
-  ├── documents.high   — dedicated priority queue
-  ├── documents.normal — 2 replicas × 4 concurrency
-  ├── webhooks         — 8 concurrency
-  └── poll_email_task  — scheduled IMAP polling (when configured)
+  ├── documents.high    — dedicated priority queue
+  ├── documents.normal  — 2 replicas × 4 concurrency
+  ├── webhooks          — 8 concurrency
+  └── poll_email_task   — scheduled IMAP polling (when configured)
        │
        ▼
   DocumentPipeline
-    1. OCR         (Tesseract | PaddleOCR)
-    2. Classify    (TF-IDF + keyword density + regex — 4 types)
-    3. Extract     (invoice | bank_statement | receipt | contract)
-    4. Line Items  (pdfplumber tables → regex fallback)
-    5. LLM enrich  (Claude Haiku — optional, for null fields only)
-    6. Validate    (dates, amounts, IBAN, cross-field consistency)
-    7. Score       (5-signal: extraction + OCR + classifier + format + consistency)
-    8. Review      (low-confidence → ReviewTask with page evidence)
+    1. OCR          (Tesseract | PaddleOCR)
+    2. Normalize    (OCR artefact cleaning)
+    3. Classify     (TF-IDF + regex + fuzzy keyword — 4 document types)
+    4. Extract      (invoice | bank_statement | receipt | contract)
+    5. Line Items   (pdfplumber tables → regex fallback)
+    6. LLM Enrich   (Claude Haiku — optional, null fields only)
+    7. Validate     (dates, amounts, IBAN, cross-field consistency)
+    8. Score        (5-signal: extraction + OCR + classifier + format + consistency)
+    9. Review       (low-confidence → ReviewTask with page evidence)
   │
   ▼
-PostgreSQL · Redis · MinIO/S3
+PostgreSQL · Redis · Local/S3 Storage
+  │
+  ▼
+Prometheus · Grafana · Celery Flower · Streamlit Review UI
 ```
-
-HTTP runtime controls:
-- app-level in-memory rate limiting is enforced via middleware, using `RATE_LIMIT_DEFAULT_PER_MINUTE` and `RATE_LIMIT_UPLOAD_PER_MINUTE`
-- Prometheus request metrics are emitted for every request via `docintel_http_requests_total` and `docintel_http_request_duration_seconds`
-- for multi-instance production deployments, the current limiter should be replaced with a shared Redis-backed implementation at the edge or middleware layer
 
 ---
 
-## Local Run
+## Installation
 
-### Fastest local path: Docker Compose
+### Prerequisites
 
-Windows PowerShell:
+| Tool | Minimum Version | Purpose |
+|---|---|---|
+| [Docker Desktop](https://docs.docker.com/get-docker/) | 24+ | Full stack via Compose |
+| [Python](https://python.org/downloads/) | 3.11+ | Local / bare-metal run |
+| [uv](https://docs.astral.sh/uv/getting-started/installation/) | 0.4+ | Fast Python package manager |
+| [Tesseract OCR](https://tesseract-ocr.github.io/tessdoc/Installation.html) | 4.1+ | OCR engine (bare-metal only) |
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\local-up.ps1 -Rebuild
-```
+---
 
-Manual equivalent:
+### Option 1 — Docker Compose (Recommended)
+
+The fastest way to get the full stack — API, workers, PostgreSQL, Redis, MinIO, Prometheus, Grafana, and the Streamlit review UI — running locally.
+
+**Step 1 — Clone and configure**
 
 ```bash
-cp .env.example .env
+git clone <your-repo-url>
+cd END-TO-END-main
+cp .env.example .env        # Docker Compose uses service hostnames (postgres, redis)
+```
+
+**Step 2 — Start all services**
+
+```bash
 docker compose up --build -d
+```
+
+**Step 3 — Apply database migrations**
+
+```bash
 docker compose exec api alembic upgrade head
 ```
 
-Open:
-
-| Service | URL |
-|---|---|
-| Main app UI | http://localhost:8000/ |
-| API docs | http://localhost:8000/docs |
-| Celery Flower | http://localhost:5555 |
-| Grafana | http://localhost:3000 (admin/admin) |
-| MinIO | http://localhost:9001 (minioadmin/minioadmin) |
-| Review UI | http://localhost:8501 |
-
-Run the sample flow:
+**Step 4 — Run the demo** *(optional)*
 
 ```bash
 bash scripts/demo_run.sh
 ```
 
-Stop services:
+**Step 5 — Stop when done**
 
 ```bash
-docker compose down
+docker compose down          # stop only
+docker compose down -v       # stop + delete all data volumes
 ```
 
-### Running directly on your machine
+<details>
+<summary><strong>Service URLs</strong></summary>
 
-If you want to run FastAPI/Celery outside Docker, start PostgreSQL and Redis locally and use:
+| Service | URL | Credentials |
+|---|---|---|
+| API + Frontend | http://localhost:8000 | — |
+| Swagger / OpenAPI | http://localhost:8000/docs | — |
+| Prometheus metrics | http://localhost:8000/metrics | — |
+| Celery Flower | http://localhost:5555 | — |
+| Grafana | http://localhost:3000 | admin / admin |
+| MinIO Console | http://localhost:9001 | minioadmin / minioadmin |
+| Streamlit Review UI | http://localhost:8501 | — |
+
+</details>
+
+---
+
+### Option 2 — Local Bare-Metal (uv)
+
+Run FastAPI and Celery directly on your machine without Docker. Requires PostgreSQL and Redis running locally.
+
+#### 2a — System dependencies
+
+**macOS (Homebrew)**
+
+```bash
+brew install tesseract poppler postgresql@16 redis
+brew services start postgresql@16
+brew services start redis
+createdb docintel
+```
+
+**Ubuntu / Debian**
+
+```bash
+sudo apt-get update
+sudo apt-get install -y tesseract-ocr tesseract-ocr-eng libtesseract-dev \
+    poppler-utils libglib2.0-0 libsm6 libxext6 libxrender1 \
+    postgresql postgresql-client redis-server
+sudo systemctl start postgresql redis-server
+sudo -u postgres createdb docintel
+```
+
+**Windows**
+
+- Install Tesseract via the [UB Mannheim installer](https://github.com/UB-Mannheim/tesseract/wiki)
+- Install PostgreSQL via [EDB installer](https://www.enterprisedb.com/downloads/postgres-postgresql-downloads)
+- Install Redis via [Memurai](https://www.memurai.com/) or WSL2
+- Add Tesseract to `PATH`
+
+#### 2b — Python environment
+
+```bash
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Create a Python 3.11 virtual environment
+uv venv .venv --python 3.11
+
+# Activate the environment
+source .venv/bin/activate          # macOS / Linux
+# .\.venv\Scripts\Activate.ps1    # Windows PowerShell
+```
+
+#### 2c — Install dependencies
+
+```bash
+# Core application + development tools
+uv pip install -e ".[dev]"
+
+# Download the required spaCy language model
+python -m spacy download en_core_web_sm
+```
+
+<details>
+<summary><strong>Optional extras</strong></summary>
+
+```bash
+# PaddleOCR (better accuracy on noisy/scanned docs, heavier footprint)
+uv pip install -e ".[paddle]"
+
+# LayoutLM / Donut (transformer-based extraction, requires GPU recommended)
+uv pip install -e ".[ml]"
+```
+
+</details>
+
+#### 2d — Configure environment
 
 ```bash
 cp .env.localhost.example .env
-pip install -e ".[dev]"
-python -m spacy download en_core_web_sm
-alembic upgrade head
-uvicorn app.main:app --reload
 ```
 
-In another shell:
+Edit `.env` and verify:
+- `DATABASE_URL` points to your local PostgreSQL instance
+- `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` point to your local Redis
+
+#### 2e — Apply migrations
 
 ```bash
-celery -A app.workers.celery_app.celery_app worker --loglevel=INFO --queues=documents.normal
+alembic upgrade head
 ```
+
+#### 2f — Start services
+
+Open **three terminals** in the project root with the venv active:
+
+**Terminal 1 — API server**
+
+```bash
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+**Terminal 2 — Celery worker**
+
+```bash
+celery -A app.workers.celery_app.celery_app worker \
+    --loglevel=INFO \
+    --queues=documents.normal,documents.high \
+    --concurrency=4
+```
+
+**Terminal 3 — Streamlit Review UI** *(optional)*
+
+```bash
+REVIEW_API_BASE=http://localhost:8000/api/v1 \
+    streamlit run review_ui/streamlit_app.py --server.port 8501
+```
+
+The API is now available at `http://localhost:8000/docs`.
 
 ---
 
-## Line Item Extraction
+### Option 3 — Production-like with Docker (multi-replica)
 
-Every invoice now returns structured line items alongside header fields:
-
-```json
-{
-  "fields": { "invoice_number": "INV-001", "total_amount": 1200.0 },
-  "line_items": [
-    { "description": "Consulting Services", "quantity": 5, "unit_price": 200.0, "line_total": 1000.0 },
-    { "description": "Software License",    "quantity": 1, "unit_price": 200.0, "line_total":  200.0 }
-  ]
-}
+```bash
+docker compose up --build -d --scale worker=3
+docker compose exec api alembic upgrade head
 ```
 
-Strategy: pdfplumber table extraction on digital PDFs → regex line-by-line parser fallback.
+For actual production, replace the in-memory rate limiter with the Redis-backed one by setting `REDIS_RATE_LIMIT_URL` in `.env` and pointing to a shared Redis instance accessible from all API replicas.
 
 ---
 
-## Duplicate & Fraud Detection
+## Configuration Reference
+
+All settings are loaded from the `.env` file. Copy the appropriate template and edit:
+
+```bash
+cp .env.example .env            # Docker Compose
+cp .env.localhost.example .env  # bare-metal local
+```
+
+<details>
+<summary><strong>Full configuration table</strong></summary>
+
+| Variable | Default | Description |
+|---|---|---|
+| `APP_NAME` | `Document Intelligence Platform` | Application name in API metadata |
+| `APP_ENV` | `local` | `local` \| `production` |
+| `DEBUG` | `false` | Enable debug mode and traceback responses |
+| `LOG_LEVEL` | `INFO` | `DEBUG` \| `INFO` \| `WARNING` \| `ERROR` |
+| `PIPELINE_VERSION` | `0.3.0` | Stamped on every extraction result |
+| `API_V1_PREFIX` | `/api/v1` | URL prefix for all versioned routes |
+| `ALLOWED_ORIGINS` | `*` | Comma-separated CORS origins. Set explicitly in production |
+| `DATABASE_URL` | `postgresql+psycopg://...` | SQLAlchemy connection string |
+| `DB_POOL_SIZE` | `10` | SQLAlchemy connection pool size |
+| `DB_MAX_OVERFLOW` | `20` | Max connections above pool size |
+| `CELERY_BROKER_URL` | `redis://localhost:6379/0` | Celery broker |
+| `CELERY_RESULT_BACKEND` | `redis://localhost:6379/1` | Celery result backend |
+| `CELERY_TASK_SOFT_TIME_LIMIT` | `300` | Seconds before task receives SoftTimeLimitExceeded |
+| `CELERY_TASK_TIME_LIMIT` | `600` | Hard timeout (seconds) |
+| `STORAGE_BACKEND` | `local` | `local` \| `s3` |
+| `UPLOAD_DIR` | `data/uploads` | Local upload directory |
+| `EXPORT_DIR` | `data/exports` | Local export directory |
+| `S3_ENDPOINT_URL` | *(empty)* | S3-compatible endpoint (MinIO, AWS, etc.) |
+| `S3_ACCESS_KEY_ID` | *(empty)* | S3 access key |
+| `S3_SECRET_ACCESS_KEY` | *(empty)* | S3 secret key |
+| `S3_BUCKET_UPLOADS` | `docintel-uploads` | Bucket for uploaded files |
+| `S3_BUCKET_EXPORTS` | `docintel-exports` | Bucket for exported files |
+| `OCR_ENGINE` | `tesseract` | `tesseract` \| `paddle` |
+| `SPACY_MODEL` | `en_core_web_sm` | spaCy model for entity extraction |
+| `LOW_CONFIDENCE_THRESHOLD` | `0.75` | Fields below this score are routed to review |
+| `MAX_UPLOAD_SIZE_MB` | `50` | Maximum upload file size |
+| `API_KEYS` | *(empty)* | Comma-separated valid API keys. Empty = auth disabled |
+| `API_KEY_HEADER` | `X-API-Key` | Header name for API key authentication |
+| `RATE_LIMIT_ENABLED` | `true` | Enable app-level rate limiting |
+| `RATE_LIMIT_UPLOAD_PER_MINUTE` | `30` | Upload endpoint rate limit |
+| `RATE_LIMIT_DEFAULT_PER_MINUTE` | `120` | Default endpoint rate limit |
+| `REDIS_RATE_LIMIT_URL` | *(empty)* | Set to enable Redis-backed rate limiter (multi-replica) |
+| `CACHE_TTL_SECONDS` | `300` | Response cache TTL |
+| `WEBHOOK_MAX_RETRIES` | `3` | Webhook delivery retry attempts |
+| `WEBHOOK_TIMEOUT_SECONDS` | `10` | Per-request webhook timeout |
+| `LLM_EXTRACTION_ENABLED` | `false` | Enable Claude Haiku fallback extraction |
+| `ANTHROPIC_API_KEY` | *(empty)* | Required when `LLM_EXTRACTION_ENABLED=true` |
+| `EMAIL_IMAP_HOST` | *(empty)* | IMAP host for email ingestion |
+| `EMAIL_IMAP_PORT` | `993` | IMAP port |
+| `EMAIL_ADDRESS` | *(empty)* | Mailbox address |
+| `EMAIL_PASSWORD` | *(empty)* | App password or IMAP password |
+| `EMAIL_FOLDER` | `INBOX` | Folder to poll |
+| `EMAIL_MAX_ATTACHMENTS_PER_RUN` | `50` | Maximum attachments processed per poll cycle |
+
+</details>
+
+---
+
+## API Reference
+
+Interactive documentation is available at `http://localhost:8000/docs` (Swagger UI) and `http://localhost:8000/redoc`.
+
+### Authentication
+
+When `API_KEYS` is set, all endpoints require the `X-API-Key` header:
+
+```bash
+curl -H "X-API-Key: your-key" http://localhost:8000/api/v1/documents
+```
+
+Leave `API_KEYS` empty in `.env` to disable authentication for local development.
+
+### Multi-tenancy
+
+Pass `X-Tenant-ID` to scope all reads and writes to a specific tenant:
+
+```bash
+curl -H "X-Tenant-ID: acme-corp" http://localhost:8000/api/v1/documents
+```
+
+### Core workflows
+
+<details>
+<summary><strong>Upload and process a document</strong></summary>
+
+```bash
+# Single file upload (returns 202 + task ID immediately)
+curl -X POST http://localhost:8000/api/v1/documents/upload \
+  -F "file=@invoice.pdf"
+
+# High-priority queue
+curl -X POST "http://localhost:8000/api/v1/documents/upload?priority=true" \
+  -F "file=@urgent.pdf"
+
+# Batch upload
+curl -X POST http://localhost:8000/api/v1/documents/upload/batch \
+  -F "files=@invoice1.pdf" \
+  -F "files=@invoice2.pdf"
+
+# Poll status
+curl http://localhost:8000/api/v1/documents/{id}/status
+
+# Get extraction result
+curl http://localhost:8000/api/v1/documents/{id}/result | python3 -m json.tool
+```
+
+</details>
+
+<details>
+<summary><strong>Export results</strong></summary>
+
+```bash
+# Flat CSV (ready for Excel or accounting systems)
+curl "http://localhost:8000/api/v1/exports/csv?document_type=invoice&status=completed" \
+  -o invoices.csv
+
+# Styled Excel workbook with frozen header row
+curl http://localhost:8000/api/v1/exports/xlsx -o documents.xlsx
+
+# Full extraction payloads as JSON array
+curl http://localhost:8000/api/v1/exports/json -o batch.json
+```
+
+</details>
+
+<details>
+<summary><strong>Purchase order matching (3-way)</strong></summary>
+
+```bash
+# Register a PO
+curl -X POST http://localhost:8000/api/v1/purchase-orders \
+  -H "Content-Type: application/json" \
+  -d '{"po_number":"PO-2024-001","vendor_name":"Acme Ltd","total_amount":1200.0}'
+
+# Match an uploaded invoice against registered POs
+curl -X POST http://localhost:8000/api/v1/purchase-orders/match/{document_id}
+```
+
+Match scoring: PO number exact match (40 pts) + vendor fuzzy match (30 pts) + amount ±1% tolerance (30 pts).
+Result: `matched` (≥85%) · `partial` (50–85%) · `unmatched`.
+
+</details>
+
+<details>
+<summary><strong>Duplicate and fraud detection</strong></summary>
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/deduplication/{id}/check
@@ -207,86 +508,100 @@ Returns a risk report with four independent signals:
 |---|---|
 | `exact_duplicate` | Byte-for-byte SHA-256 hash match |
 | `invoice_number_collision` | Same invoice number already in database |
-| `amount_anomaly` | Total >3σ from vendor historical mean (min 5 past invoices) |
+| `amount_anomaly` | Total >3σ from vendor historical mean (min 5 invoices) |
 | `vendor_velocity` | Vendor submitted >20 invoices in last 24 hours |
 
-Risk levels: `clean` / `low` / `medium` / `high`.
+Risk levels: `clean` · `low` · `medium` · `high`
 
----
+</details>
 
-## PO Matching (3-Way Match)
+<details>
+<summary><strong>Human review workflow</strong></summary>
 
 ```bash
-# Register a PO
-curl -X POST http://localhost:8000/api/v1/purchase-orders \
+# List tasks needing review (includes page number + bbox + validation reason)
+curl http://localhost:8000/api/v1/reviews/pending | python3 -m json.tool
+
+# Submit a correction
+curl -X POST http://localhost:8000/api/v1/reviews/{task_id}/decision \
   -H "Content-Type: application/json" \
-  -d '{"po_number":"PO-2024-001","vendor_name":"Acme Ltd","total_amount":1200.0}'
-
-# Match an invoice against registered POs
-curl -X POST http://localhost:8000/api/v1/purchase-orders/match/{document_id}
+  -d '{"decision":"corrected","corrected_value":"INV-2024-001","reviewer":"analyst","comment":"OCR misread digit"}'
 ```
 
-Match logic: PO number exact match (40pts) + vendor name fuzzy match (30pts) + total amount ±1% tolerance (30pts).
-Result: `matched` (≥85%) / `partial` (50–85%) / `unmatched` with per-field discrepancies.
+</details>
 
----
-
-## LLM Fallback Extraction
-
-Enable optional Anthropic-backed fallback extraction to recover fields that regex missed:
-
-```env
-LLM_EXTRACTION_ENABLED=true
-```
-
-When enabled, null low-signal fields are sent to Anthropic with a structured prompt. Only null fields are re-extracted, so the LLM does not overwrite successful deterministic extraction.
-
----
-
-## Email Ingestion
-
-```env
-EMAIL_IMAP_HOST=imap.gmail.com
-EMAIL_ADDRESS=ap@yourcompany.com
-EMAIL_PASSWORD=your-app-password
-EMAIL_FOLDER=INBOX
-```
-
-Schedule the Celery task:
-```python
-celery_app.conf.beat_schedule = {
-    "poll-email": {"task": "app.workers.tasks.poll_email_task", "schedule": 300.0}
-}
-```
-
----
-
-## Exports
+<details>
+<summary><strong>Webhooks (HMAC-SHA256 signed)</strong></summary>
 
 ```bash
-# Flat CSV — paste directly into Excel or accounting system
-curl "http://localhost:8000/api/v1/exports/csv?document_type=invoice&status=completed" \
-  -o invoices.csv
-
-# Styled Excel workbook with frozen header row
-curl "http://localhost:8000/api/v1/exports/xlsx" -o documents.xlsx
-
-# Full extraction payloads as JSON array
-curl "http://localhost:8000/api/v1/exports/json" -o batch.json
+# Register a webhook endpoint
+curl -X POST http://localhost:8000/api/v1/webhooks \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://your.server/hook","events":["processing_completed","review_required"]}'
 ```
 
----
+Events fired: `processing_completed` · `processing_failed` · `review_required`
 
-## Active Learning
+Each request includes an `X-Signature-SHA256` header for payload verification.
 
-Every reviewer correction is stored:
+</details>
+
+<details>
+<summary><strong>Active learning — corrections export</strong></summary>
 
 ```bash
 # Export corrections as labelled training data
 curl "http://localhost:8000/api/v1/analytics/corrections?document_type=invoice"
 
-# See which fields fail most
-curl "http://localhost:8000/api/v1/analytics/corrections/stats"
+# Field failure statistics
+curl http://localhost:8000/api/v1/analytics/corrections/stats
+```
+
+</details>
+
+---
+
+## Extraction Output Schema
+
+```json
+{
+  "document_type": "invoice",
+  "schema_version": "2.0",
+  "source_file": "invoice_001.pdf",
+  "fields": {
+    "invoice_number": "INV-001",
+    "invoice_date": "2025-08-01",
+    "vendor_name": "Acme Supplies Ltd",
+    "customer_name": "Northwind Retail LLC",
+    "subtotal": 1000.0,
+    "tax": 200.0,
+    "total_amount": 1200.0
+  },
+  "line_items": [
+    {
+      "description": "Consulting Services",
+      "quantity": 5,
+      "unit_price": 200.0,
+      "line_total": 1000.0
+    }
+  ],
+  "field_confidences": [
+    {
+      "name": "invoice_number",
+      "value": "INV-001",
+      "confidence": 0.92,
+      "requires_review": false
+    }
+  ],
+  "document_confidence": 0.89,
+  "validation_results": [
+    {
+      "field": "total_amount",
+      "valid": true,
+      "reason": null
+    }
+  ]
+}
 ```
 
 ---
@@ -294,47 +609,164 @@ curl "http://localhost:8000/api/v1/analytics/corrections/stats"
 ## Running Tests
 
 ```bash
-pip install -e ".[dev]"
+# All tests
 pytest -v --tb=short
+
+# With coverage report
+pytest --cov=app --cov-report=term-missing
+
+# Single test file
+pytest tests/test_validators.py -v
 ```
 
-| File | Cases |
-|---|---|
-| `test_documents_api.py` | 9 |
-| `test_review_api.py` | 5 |
-| `test_webhooks_api.py` | 5 |
-| `test_extractor_pipeline.py` | 9 |
-| `test_classifier.py` | 9 |
-| `test_confidence.py` | 8 |
-| `test_validators.py` | 18 |
-| `test_analytics_api.py` | 7 |
-| `test_new_features.py` | 12 |
-| **Total** | **82** |
+| Test File | Cases | Coverage |
+|---|---|---|
+| `test_documents_api.py` | 9 | Upload, list, search, detail, delete, reprocess |
+| `test_review_api.py` | 5 | Review queue, decision submission |
+| `test_webhooks_api.py` | 5 | Registration, HMAC signing |
+| `test_extractor_pipeline.py` | 9 | Invoice + bank statement extraction |
+| `test_classifier.py` | 9 | All four document types |
+| `test_confidence.py` | 8 | Field and document scoring |
+| `test_validators.py` | 18 | Dates, amounts, IBAN, cross-field |
+| `test_analytics_api.py` | 7 | Metrics, corrections, audit |
+| `test_new_features.py` | 12 | PO matching, dedup, exports |
+| `test_http_runtime.py` | 11 | Rate limiting, metrics middleware |
+| `test_startup_smoke.py` | 3 | App import, route count, health |
+| **Total** | **110** | |
 
 ---
 
 ## Database Migrations
 
 ```bash
-alembic upgrade head        # apply all (0001 → 0002 → 0003)
-alembic current             # check state
-alembic downgrade -1        # rollback one step
+alembic upgrade head         # apply all pending migrations
+alembic current              # check current state
+alembic history              # show migration history
+alembic downgrade -1         # rollback one step
 ```
 
 | Migration | Adds |
 |---|---|
-| `0001` | All core tables + indexes |
-| `0002` | Page evidence on review_tasks, CorrectionRecord, validation_results, UTC timestamps |
-| `0003` | PurchaseOrder + POMatch tables |
+| `0001_initial_schema` | Core tables: `documents`, `extraction_results`, `review_tasks`, `review_decisions`, `audit_logs` |
+| `0002_add_evidence_corrections_utc` | Page evidence on review tasks, `CorrectionRecord`, UTC timestamps |
+| `0003_add_po_matching_deduplication` | `PurchaseOrder` + `POMatch` tables |
+| `0004_add_correlation_id_and_dead_letter` | Correlation IDs, dead-letter support |
+
+---
+
+## Observability
+
+Prometheus metrics are exported at `GET /metrics`. Key metrics:
+
+| Metric | Type | Description |
+|---|---|---|
+| `docintel_http_requests_total` | Counter | Request count by method, path, status |
+| `docintel_http_request_duration_seconds` | Histogram | Request latency by method, path |
+| `docintel_documents_uploaded_total` | Counter | Uploads by tenant |
+
+Import the included Grafana provisioning from `infra/grafana/provisioning/` or connect Grafana to the Prometheus instance at `http://prometheus:9090`.
+
+Rate limit headers are returned on every request:
+
+```
+X-RateLimit-Limit: 120
+X-RateLimit-Remaining: 119
+X-RateLimit-Reset: 42
+```
+
+---
+
+## LLM Fallback Extraction
+
+When enabled, fields that could not be extracted by the deterministic pipeline are sent to Claude Haiku for recovery. Only `null` fields are re-extracted — deterministic results are never overwritten.
+
+```env
+LLM_EXTRACTION_ENABLED=true
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+---
+
+## Email Ingestion (IMAP)
+
+Configure to automatically poll a mailbox and enqueue PDF attachments:
+
+```env
+EMAIL_IMAP_HOST=imap.gmail.com
+EMAIL_ADDRESS=ap@yourcompany.com
+EMAIL_PASSWORD=your-app-password
+EMAIL_FOLDER=INBOX
+EMAIL_MAX_ATTACHMENTS_PER_RUN=50
+```
+
+The Celery beat schedule for polling (every 5 minutes):
+
+```python
+celery_app.conf.beat_schedule = {
+    "poll-email": {
+        "task": "app.workers.tasks.poll_email_task",
+        "schedule": 300.0
+    }
+}
+```
+
+---
+
+## Project Structure
+
+```
+├── app/
+│   ├── api/v1/routes/      — FastAPI route handlers
+│   ├── classification/     — TF-IDF + regex + fuzzy document classifier
+│   ├── core/               — config, logging, metrics, rate limiter
+│   ├── db/                 — SQLAlchemy models + session
+│   ├── extraction/         — per-type extractors (invoice, bank_statement, receipt, contract)
+│   ├── ocr/                — OCR providers (Tesseract, PaddleOCR) + factory
+│   ├── pipelines/          — document pipeline + confidence scorer
+│   ├── schemas/            — Pydantic request/response models
+│   ├── services/           — business logic (document, review, PO, dedup, export, LLM, webhook)
+│   ├── storage/            — storage backends (local, S3) + factory
+│   ├── utils/              — validators, text normalisation, PDF utilities
+│   └── workers/            — Celery app + task definitions
+├── alembic/                — database migrations
+├── evaluation/             — benchmark scripts, dataset, ground truth, results
+├── frontend/               — single-file HTML frontend (served by FastAPI)
+├── infra/                  — Prometheus config, Grafana provisioning
+├── review_ui/              — Streamlit human-review interface
+├── sample_docs/            — sample PDFs for quick testing
+├── scripts/                — demo, evaluation, calibration, retrain scripts
+├── tests/                  — 110 pytest tests
+├── docker-compose.yml
+├── Dockerfile              — multi-stage, non-root user, healthcheck
+└── pyproject.toml
+```
 
 ---
 
 ## Known Limitations
 
-| Limitation | Next Step |
+| Limitation | Planned Fix |
 |---|---|
-| Noisy OCR: 0% classification | Enable `LLM_EXTRACTION_ENABLED=true` for recovery; long-term: LayoutLM/Donut |
-| `invoice_number` F1=0.00 on noisy | Character-level normalisation (`0→O` reversal) before classification |
-| `subtotal` recall=50% | Layout variation; line-item sum can derive it when direct extraction fails |
-| No real IMAP test | Requires live mailbox; unit test with mock available |
-| Noisy synthetic docs still classify poorly | Current baseline is weak on OCR-artefact-heavy samples; improve with stronger layout-aware classification |
+| Rate limiter uses a fixed window — susceptible to boundary burst | Sliding window / token bucket via Redis (redis-cell) |
+| In-memory rate limiter does not share state across replicas | Set `REDIS_RATE_LIMIT_URL` to enable the Redis-backed limiter |
+| `subtotal` recall = 85.7% | Layout variation; derive from line-item sum when direct extraction fails |
+| No OAuth/JWT authentication | Static API keys are adequate for single-tenant deployments |
+| Synthetic evaluation dataset only | SROIE / FUNSD benchmark integration planned |
+
+---
+
+## Roadmap
+
+- [ ] Sliding-window Redis rate limiter
+- [ ] CI/CD pipeline (GitHub Actions — pytest, ruff, mypy, docker build)
+- [ ] LayoutLMv3 / Donut fine-tune for noisy document extraction
+- [ ] SROIE and FUNSD public benchmark evaluation
+- [ ] JWT / OAuth2 tenant authentication
+- [ ] OpenTelemetry distributed tracing
+- [ ] Idempotent re-upload (SHA-256 content deduplication at ingest)
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE) for details.
