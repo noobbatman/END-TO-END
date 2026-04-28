@@ -33,6 +33,32 @@ Built by surveying 30+ open-source alternatives and commercial platforms (Rossum
 
 ---
 
+## About this project
+
+**Sole developer** — I designed and built the entire platform from scratch,
+including architecture decisions, all Python backend code, the Celery worker
+pipeline, database schema migrations, Docker Compose setup, Prometheus/Grafana
+observability, and all 110 test cases.
+
+**What I implemented:**
+- Multi-stage document pipeline: OCR → classify → extract → validate → score → review → export
+- Async task queue with Celery, Redis broker, and priority queues
+- Fraud / duplicate detection (4-signal: hash, invoice collision, anomaly, velocity)
+- Human-in-the-loop review workflow with page-level evidence (bbox, page_number)
+- Active learning loop via CorrectionRecord → training data export
+- 3-way purchase order matching with fuzzy vendor matching
+- Prometheus metrics + Grafana dashboards for full observability
+- Docker multi-stage build, non-root user, healthchecks
+- 110 pytest tests covering API routes, pipeline, validators, and middleware
+
+**What I learnt:**
+- How to design production-grade async pipelines (Celery + Redis + PostgreSQL)
+- OCR preprocessing techniques (Tesseract, PaddleOCR, noise normalization)
+- Confidence scoring across multiple signals for ML output trustworthiness
+- How to structure a multi-module Python project with pyproject.toml and uv
+- Prometheus/Grafana observability — what metrics actually matter in production
+- Building human-review workflows (HITL) with audit trails and active learning
+
 ## Benchmark Results
 
 > **Dataset:** 80 synthetic PDFs — 40 invoices · 40 bank statements · clean / multipage / noisy variants  
