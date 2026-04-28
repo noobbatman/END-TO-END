@@ -59,6 +59,24 @@ observability, and all 110 test cases.
 - Prometheus/Grafana observability — what metrics actually matter in production
 - Building human-review workflows (HITL) with audit trails and active learning
 
+---
+
+## Product Screenshots
+
+### Dashboard
+
+![Dashboard](images/dashboard.png)
+
+### Analytics
+
+![Analytics](images/analytics.png)
+
+### Review Queue
+
+![Review queue](images/review_queue.png)
+
+---
+
 ## Benchmark Results
 
 > **Dataset:** 80 synthetic PDFs — 40 invoices · 40 bank statements · clean / multipage / noisy variants  
